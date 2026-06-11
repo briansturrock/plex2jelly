@@ -1,11 +1,13 @@
+name: plex2jelly
+
 services:
   plex2jelly:
     build: .
-    container_name: plex2jelly
+    restart: unless-stopped
+    ports:
+      - "8099:8099"
     environment:
-      PLEX2JELLY_CONFIG: /config/config.yml
+      PLEX2JELLY_DB: /data/plex2jelly.db
     volumes:
-      - /docker/plex4jelly/config:/config
       - /docker/plex4jelly/data:/data
       - /docker/plex4jelly/logs:/logs
-    restart: unless-stopped

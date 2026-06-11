@@ -1,3 +1,3 @@
 from __future__ import annotations
 
-# Shared models will be added as the matching/database layer expands.
+# Reserved for typed sync models as the matcher and sync engines are added.

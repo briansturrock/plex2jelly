@@ -1,8 +1,7 @@
 FROM python:3.12-slim
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PLEX2JELLY_CONFIG=/config/config.yml
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
@@ -10,8 +9,12 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
-COPY docker/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY config ./config
+COPY docker ./docker
 
-ENTRYPOINT ["/entrypoint.sh"]
-CMD ["health"]
+RUN chmod +x /app/docker/entrypoint.sh
+
+EXPOSE 8099
+
+ENTRYPOINT ["/app/docker/entrypoint.sh"]
+CMD ["web"]

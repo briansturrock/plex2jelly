@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Settings</h2>
+  <form method="post">
+    <label>Plex base URL
+      <input name="plex_base_url" value="{{ cfg.plex_base_url }}" placeholder="http://192.168.1.10:32400">
+    </label>
+    <label>Plex X-Plex-Token
+      <input name="plex_token" value="{{ cfg.plex_token }}" placeholder="Plex token">
+    </label>
+    <label>Jellyfin base URL
+      <input name="jellyfin_base_url" value="{{ cfg.jellyfin_base_url }}" placeholder="http://192.168.1.20:8096">
+    </label>
+    <label>Jellyfin API key
+      <input name="jellyfin_api_key" value="{{ cfg.jellyfin_api_key }}" placeholder="Jellyfin API key">
+    </label>
+    <button type="submit">Save settings</button>
+  </form>
+</section>
+{% endblock %}

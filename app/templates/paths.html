@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Path mappings</h2>
+  <form method="post" class="inline-form">
+    <label>Plex path prefix
+      <input name="plex_path" placeholder="/media/bdssnas/movies">
+    </label>
+    <label>Jellyfin path prefix
+      <input name="jellyfin_path" placeholder="/media/movies">
+    </label>
+    <button type="submit">Add mapping</button>
+  </form>
+</section>
+<section class="card">
+  <h2>Current mappings</h2>
+  <table>
+    <thead><tr><th>Plex path</th><th>Jellyfin path</th><th></th></tr></thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>{{ row.plex_path }}</td>
+        <td>{{ row.jellyfin_path }}</td>
+        <td>
+          <form method="post" action="{{ url_for('delete_path', mapping_id=row.id) }}">
+            <button type="submit" class="secondary">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3">No path mappings yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

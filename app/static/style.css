@@ -1,0 +1,97 @@
+body {
+  margin: 0;
+  font-family: Arial, Helvetica, sans-serif;
+  background: #f4f5f7;
+  color: #202124;
+}
+header {
+  background: #202124;
+  color: white;
+  padding: 1rem 2rem;
+}
+header h1 {
+  margin: 0 0 0.75rem 0;
+}
+nav a {
+  color: white;
+  margin-right: 1rem;
+  text-decoration: none;
+}
+main {
+  padding: 2rem;
+  max-width: 1100px;
+}
+.card {
+  background: white;
+  border-radius: 8px;
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+}
+label {
+  display: block;
+  margin-bottom: 1rem;
+  font-weight: bold;
+}
+input, select {
+  display: block;
+  width: 100%;
+  max-width: 520px;
+  padding: 0.5rem;
+  margin-top: 0.25rem;
+  box-sizing: border-box;
+}
+button {
+  background: #202124;
+  color: white;
+  border: 0;
+  padding: 0.6rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+button.secondary {
+  background: #5f6368;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+th, td {
+  text-align: left;
+  border-bottom: 1px solid #ddd;
+  padding: 0.6rem;
+  vertical-align: top;
+}
+.flash {
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+  border-radius: 4px;
+}
+.flash.success {
+  background: #e6f4ea;
+}
+.flash.error {
+  background: #fce8e6;
+}
+.ok {
+  color: #188038;
+  font-weight: bold;
+}
+.bad {
+  color: #c5221f;
+  font-weight: bold;
+}
+.inline-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  align-items: end;
+}
+.inline-form label {
+  margin-bottom: 0;
+}

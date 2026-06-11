@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Health</h2>
+  <table>
+    <thead><tr><th>Check</th><th>Status</th><th>Details</th></tr></thead>
+    <tbody>
+      {% for name, ok, msg in checks %}
+      <tr>
+        <td>{{ name }}</td>
+        <td class="{{ 'ok' if ok else 'bad' }}">{{ 'OK' if ok else 'Check' }}</td>
+        <td>{{ msg }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

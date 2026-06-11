@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Library mappings</h2>
+  {% if not cfg.has_plex or not cfg.has_jellyfin %}
+    <p>Configure Plex and Jellyfin first.</p>
+  {% elif discovery_error %}
+    <p class="bad">Library discovery failed: {{ discovery_error }}</p>
+  {% else %}
+    <form method="post" class="inline-form">
+      <label>Mapping name
+        <input name="name" placeholder="Movies">
+      </label>
+      <label>Plex library
+        <select name="plex_library">
+          {% for lib in plex_libraries %}
+          <option value="{{ lib.key }}|{{ lib.title }}">{{ lib.title }} ({{ lib.type }})</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Jellyfin library
+        <select name="jellyfin_library">
+          {% for lib in jellyfin_libraries %}
+          <option value="{{ lib.id }}|{{ lib.name }}">{{ lib.name }} ({{ lib.type }})</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Media type
+        <select name="media_type">
+          <option value="movie">movie</option>
+          <option value="show">show</option>
+          <option value="unknown">unknown</option>
+        </select>
+      </label>
+      <button type="submit">Add mapping</button>
+    </form>
+  {% endif %}
+</section>
+<section class="card">
+  <h2>Current mappings</h2>
+  <table>
+    <thead><tr><th>Name</th><th>Plex</th><th>Jellyfin</th><th>Type</th><th></th></tr></thead>
+    <tbody>
+      {% for row in mappings %}
+      <tr>
+        <td>{{ row.name }}</td>
+        <td>{{ row.plex_library_name }}</td>
+        <td>{{ row.jellyfin_library_name }}</td>
+        <td>{{ row.media_type }}</td>
+        <td>
+          <form method="post" action="{{ url_for('delete_library', mapping_id=row.id) }}">
+            <button type="submit" class="secondary">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5">No library mappings yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

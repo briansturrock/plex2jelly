@@ -1,25 +1,46 @@
 from __future__ import annotations
 
+import os
 import sqlite3
-from pathlib import Path
+from contextlib import contextmanager
+from typing import Iterator
 
+DEFAULT_DB_PATH = os.getenv("PLEX2JELLY_DB", "/data/plex2jelly.db")
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS schema_version (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    version INTEGER NOT NULL,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL DEFAULT ''
 );
 
-INSERT OR IGNORE INTO schema_version (id, version) VALUES (1, 1);
-
-CREATE TABLE IF NOT EXISTS items (
+CREATE TABLE IF NOT EXISTS path_mappings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plex_path TEXT NOT NULL,
+    jellyfin_path TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS library_mappings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    plex_library_key TEXT NOT NULL,
+    plex_library_name TEXT NOT NULL,
+    jellyfin_library_id TEXT NOT NULL,
+    jellyfin_library_name TEXT NOT NULL,
+    media_type TEXT NOT NULL DEFAULT 'unknown',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS sync_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    library_mapping_id INTEGER NOT NULL,
     plex_rating_key TEXT,
     plex_guid TEXT,
     jellyfin_item_id TEXT,
     media_type TEXT,
-    canonical_path TEXT UNIQUE,
+    canonical_path TEXT,
     plex_path TEXT,
     jellyfin_path TEXT,
     plex_title TEXT,
@@ -28,52 +49,59 @@ CREATE TABLE IF NOT EXISTS items (
     tmdb_id TEXT,
     imdb_id TEXT,
     tmdb_lookup_status TEXT NOT NULL DEFAULT 'not_attempted',
-    tmdb_lookup_confidence REAL,
-    tmdb_last_checked_at TEXT,
     metadata_hash TEXT,
     artwork_hash TEXT,
     match_status TEXT NOT NULL DEFAULT 'unknown',
     last_seen_at TEXT,
     last_synced_at TEXT,
-    last_error TEXT
-);
-
-CREATE TABLE IF NOT EXISTS watch_state (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    item_id INTEGER NOT NULL,
-    plex_user_id TEXT,
-    jellyfin_user_id TEXT,
-    plex_view_count INTEGER,
-    plex_view_offset_ms INTEGER,
-    plex_last_viewed_at TEXT,
-    jellyfin_played INTEGER,
-    jellyfin_play_count INTEGER,
-    jellyfin_playback_position_ticks INTEGER,
-    jellyfin_last_played_date TEXT,
-    last_synced_plex_state_hash TEXT,
-    last_synced_jellyfin_state_hash TEXT,
-    last_synced_at TEXT,
-    last_direction TEXT,
-    conflict_status TEXT,
-    FOREIGN KEY (item_id) REFERENCES items(id)
+    UNIQUE(library_mapping_id, canonical_path)
 );
 """
 
 
-def initialise_database(path: str) -> None:
-    db_path = Path(path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(db_path) as conn:
-        conn.executescript(SCHEMA)
-        conn.commit()
+def get_db_path() -> str:
+    return os.getenv("PLEX2JELLY_DB", DEFAULT_DB_PATH)
 
 
-def check_database(path: str) -> tuple[bool, str]:
+@contextmanager
+def connect() -> Iterator[sqlite3.Connection]:
+    db_path = get_db_path()
+    parent = os.path.dirname(db_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
     try:
-        initialise_database(path)
-        with sqlite3.connect(path) as conn:
-            row = conn.execute("SELECT version FROM schema_version WHERE id = 1").fetchone()
-        version = row[0] if row else "unknown"
-        return True, f"OK (schema version {version})"
-    except Exception as exc:  # pragma: no cover - health command reports the exact error
-        return False, str(exc)
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def init_db() -> None:
+    with connect() as conn:
+        conn.executescript(SCHEMA)
+
+
+def get_setting(key: str, default: str = "") -> str:
+    init_db()
+    with connect() as conn:
+        row = conn.execute("SELECT value FROM app_settings WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else default
+
+
+def set_setting(key: str, value: str) -> None:
+    init_db()
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO app_settings(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value or ""),
+        )
+
+
+def get_settings() -> dict[str, str]:
+    init_db()
+    with connect() as conn:
+        rows = conn.execute("SELECT key, value FROM app_settings ORDER BY key").fetchall()
+        return {row["key"]: row["value"] for row in rows}

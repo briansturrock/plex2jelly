@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Dashboard</h2>
+  <p>This container will keep Jellyfin as a warm-standby replica of Plex.</p>
+  <div class="grid">
+    <div><strong>Plex configured</strong><br>{{ "Yes" if cfg.has_plex else "No" }}</div>
+    <div><strong>Jellyfin configured</strong><br>{{ "Yes" if cfg.has_jellyfin else "No" }}</div>
+    <div><strong>Path mappings</strong><br>{{ path_count }}</div>
+    <div><strong>Library mappings</strong><br>{{ lib_count }}</div>
+  </div>
+</section>
+<section class="card">
+  <h2>v0.1 scope</h2>
+  <ul>
+    <li>Configure Plex and Jellyfin through the UI.</li>
+    <li>Test connectivity.</li>
+    <li>Store path mappings.</li>
+    <li>Discover and map libraries.</li>
+  </ul>
+</section>
+{% endblock %}
