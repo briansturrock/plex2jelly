@@ -1,0 +1,37 @@
+app:
+  name: plex2jelly
+  log_level: INFO
+  dry_run_default: true
+
+plex:
+  base_url: "http://PLEX_IP:32400"
+  token: "YOUR_X_PLEX_TOKEN"
+
+jellyfin:
+  base_url: "http://JELLYFIN_IP:8096"
+  api_key: "YOUR_JELLYFIN_API_KEY"
+
+database:
+  path: "/data/plex2jelly.db"
+
+path_mappings:
+  - plex: "/media/bdssnas/movies"
+    jellyfin: "/media/movies"
+
+libraries:
+  - name: "Movies"
+    enabled: true
+    media_type: "movie"
+    plex_library: "Movies"
+    jellyfin_library: "Movies"
+
+sync:
+  metadata:
+    enabled: false
+  artwork:
+    enabled: false
+  collections:
+    enabled: false
+  watch_state:
+    enabled: false
+    direction: bidirectional

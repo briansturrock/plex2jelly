@@ -1,0 +1,11 @@
+services:
+  plex2jelly:
+    build: .
+    container_name: plex2jelly
+    environment:
+      PLEX2JELLY_CONFIG: /config/config.yml
+    volumes:
+      - /docker/plex4jelly/config:/config
+      - /docker/plex4jelly/data:/data
+      - /docker/plex4jelly/logs:/logs
+    restart: unless-stopped
