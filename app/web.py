@@ -83,7 +83,6 @@ def create_app() -> Flask:
                 ORDER BY name COLLATE NOCASE
                 """
             ).fetchall()
-
         if request.method == "POST":
             library_mapping_id = request.form.get("library_mapping_id", "").strip()
             plex_path = request.form.get("plex_path", "").strip().rstrip("/")
@@ -103,20 +102,11 @@ def create_app() -> Flask:
             else:
                 flash("Both paths are required.", "error")
             return redirect(url_for("paths"))
-
         with connect() as conn:
             rows = conn.execute(
                 """
-                SELECT
-                    pm.id,
-                    pm.library_mapping_id,
-                    pm.plex_path,
-                    pm.jellyfin_path,
-                    pm.enabled,
-                    lm.name AS library_name,
-                    lm.plex_library_name,
-                    lm.jellyfin_library_name,
-                    lm.media_type
+                SELECT pm.id, pm.library_mapping_id, pm.plex_path, pm.jellyfin_path, pm.enabled,
+                       lm.name AS library_name, lm.plex_library_name, lm.jellyfin_library_name, lm.media_type
                 FROM path_mappings pm
                 LEFT JOIN library_mappings lm ON lm.id = pm.library_mapping_id
                 ORDER BY COALESCE(lm.name, 'Unscoped') COLLATE NOCASE, pm.id
@@ -140,16 +130,13 @@ def create_app() -> Flask:
             name = request.form.get("name", "").strip()
             media_type = request.form.get("media_type", "unknown").strip() or "unknown"
             enabled = 1 if request.form.get("enabled") == "on" else 0
-
             if "|" not in plex_value or "|" not in jellyfin_value:
                 flash("Select both a Plex and Jellyfin library.", "error")
                 return redirect(url_for("libraries"))
-
             plex_key, plex_name = plex_value.split("|", 1)
             jellyfin_id, jellyfin_name = jellyfin_value.split("|", 1)
             if not name:
                 name = plex_name
-
             with connect() as conn:
                 conn.execute(
                     """
@@ -162,16 +149,13 @@ def create_app() -> Flask:
                 )
             flash("Library mapping added.", "success")
             return redirect(url_for("libraries"))
-
         with connect() as conn:
             mappings = conn.execute("SELECT * FROM library_mappings ORDER BY id").fetchall()
-        plex_libraries = get_discovered_libraries("plex")
-        jellyfin_libraries = get_discovered_libraries("jellyfin")
         return render_template(
             "libraries.html",
             cfg=cfg,
-            plex_libraries=plex_libraries,
-            jellyfin_libraries=jellyfin_libraries,
+            plex_libraries=get_discovered_libraries("plex"),
+            jellyfin_libraries=get_discovered_libraries("jellyfin"),
             mappings=mappings,
         )
 
@@ -251,9 +235,8 @@ def create_app() -> Flask:
                 ORDER BY name COLLATE NOCASE
                 """
             ).fetchall()
-
             params: list[object] = []
-            where = []
+            where: list[str] = []
             if selected_mapping_id:
                 where.append("library_mapping_id = ?")
                 params.append(int(selected_mapping_id))
@@ -266,16 +249,14 @@ def create_app() -> Flask:
                     where.append("match_status = ?")
                     params.append(status_filter)
             where_sql = " WHERE " + " AND ".join(f"({w})" for w in where) if where else ""
-
             stats = conn.execute(
                 f"""
-                SELECT
-                  COUNT(*) AS total,
-                  SUM(CASE WHEN match_status = 'matched' THEN 1 ELSE 0 END) AS matched,
-                  SUM(CASE WHEN COALESCE(match_warning, '') != '' THEN 1 ELSE 0 END) AS warnings,
-                  SUM(CASE WHEN match_status = 'unmatched_plex' THEN 1 ELSE 0 END) AS unmatched_plex,
-                  SUM(CASE WHEN match_status = 'unmatched_jellyfin' THEN 1 ELSE 0 END) AS unmatched_jellyfin,
-                  SUM(CASE WHEN match_status = 'path_failure' THEN 1 ELSE 0 END) AS path_failure
+                SELECT COUNT(*) AS total,
+                       SUM(CASE WHEN match_status = 'matched' THEN 1 ELSE 0 END) AS matched,
+                       SUM(CASE WHEN COALESCE(match_warning, '') != '' THEN 1 ELSE 0 END) AS warnings,
+                       SUM(CASE WHEN match_status = 'unmatched_plex' THEN 1 ELSE 0 END) AS unmatched_plex,
+                       SUM(CASE WHEN match_status = 'unmatched_jellyfin' THEN 1 ELSE 0 END) AS unmatched_jellyfin,
+                       SUM(CASE WHEN match_status = 'path_failure' THEN 1 ELSE 0 END) AS path_failure
                 FROM sync_items{where_sql}
                 """,
                 params,
@@ -287,14 +268,12 @@ def create_app() -> Flask:
                 FROM sync_items si
                 JOIN library_mappings lm ON lm.id = si.library_mapping_id
                 {where_sql}
-                ORDER BY
-                  CASE WHEN match_status = 'matched' AND COALESCE(match_warning, '') = '' THEN 1 ELSE 0 END,
-                  COALESCE(plex_title, jellyfin_title, canonical_path) COLLATE NOCASE
+                ORDER BY CASE WHEN match_status = 'matched' AND COALESCE(match_warning, '') = '' THEN 1 ELSE 0 END,
+                         COALESCE(plex_title, jellyfin_title, canonical_path) COLLATE NOCASE
                 LIMIT ? OFFSET ?
                 """,
                 [*params, page_size, offset],
             ).fetchall()
-
         total_pages = max(1, (total + page_size - 1) // page_size)
         return render_template(
             "match.html",
@@ -323,11 +302,8 @@ def create_app() -> Flask:
 
         plex = PlexClient(cfg.plex_base_url, cfg.plex_token, timeout=15)
         jellyfin = JellyfinClient(cfg.jellyfin_base_url, cfg.jellyfin_api_key, timeout=15)
-        applied = 0
-        failed = 0
-        skipped = 0
+        applied = failed = skipped = 0
         errors: list[str] = []
-
         for sync_item_id in selected_ids:
             try:
                 result = _apply_identity_overwrite(sync_item_id, plex, jellyfin)
@@ -341,7 +317,6 @@ def create_app() -> Flask:
                 errors.append(error_text)
                 current_app.logger.exception("Identity overwrite failed for sync_item_id=%s: %s", sync_item_id, error_text)
                 _record_identity_failure(sync_item_id, error_text)
-
         category = "success" if failed == 0 else "error"
         message = f"Identity overwrite complete: {applied} applied, {skipped} skipped, {failed} failed."
         if errors:
@@ -363,7 +338,6 @@ def _safe_int(value: object, default: int, minimum: int, maximum: int) -> int:
 def _run_match_preview(library_mapping_id: int, cfg: AppConfig) -> dict[str, int]:
     if not cfg.has_plex or not cfg.has_jellyfin:
         raise RuntimeError("Plex and Jellyfin must be configured first.")
-
     with connect() as conn:
         mapping = conn.execute("SELECT * FROM library_mappings WHERE id = ?", (library_mapping_id,)).fetchone()
         if not mapping:
@@ -473,30 +447,44 @@ def _apply_identity_overwrite(sync_item_id: int, plex: PlexClient, jellyfin: Jel
     if not plex_meta.get("title"):
         raise RuntimeError("Plex metadata did not include a title.")
 
-    jf_item = jellyfin.get_item(row["jellyfin_item_id"])
-    patched = dict(jf_item)
-    patched["Name"] = plex_meta.get("title") or patched.get("Name")
-    patched["OriginalTitle"] = plex_meta.get("original_title") or plex_meta.get("title") or patched.get("OriginalTitle")
-    patched["SortName"] = plex_meta.get("sort_title") or plex_meta.get("title") or patched.get("SortName")
-    patched["Overview"] = plex_meta.get("summary") or patched.get("Overview")
-    patched["Tagline"] = plex_meta.get("tagline") or patched.get("Tagline")
-    if plex_meta.get("year") is not None:
-        patched["ProductionYear"] = plex_meta.get("year")
-    if plex_meta.get("originally_available_at"):
-        patched["PremiereDate"] = f"{plex_meta['originally_available_at']}T00:00:00.0000000Z"
-    if plex_meta.get("content_rating"):
-        patched["OfficialRating"] = plex_meta.get("content_rating")
-    if plex_meta.get("audience_rating") is not None:
-        patched["CommunityRating"] = plex_meta.get("audience_rating")
+    # Do not call GET /Items/{id} before updating. On some Jellyfin 10.11 builds that endpoint
+    # returns 400 unless called in a user-scoped form. For identity overwrite we already have
+    # the stable Jellyfin item id from the library scan, so build an editor-style DTO directly.
+    payload: dict[str, object] = {
+        "Id": row["jellyfin_item_id"],
+        "Type": "Movie" if (row["media_type"] or "movie") == "movie" else row["media_type"],
+        "Name": plex_meta.get("title") or row["jellyfin_title"] or row["plex_title"],
+        "OriginalTitle": plex_meta.get("original_title") or plex_meta.get("title") or "",
+        "ForcedSortName": plex_meta.get("sort_title") or plex_meta.get("title") or "",
+        "SortName": plex_meta.get("sort_title") or plex_meta.get("title") or "",
+        "Overview": plex_meta.get("summary") or "",
+        "Tagline": plex_meta.get("tagline") or "",
+        "Genres": [],
+        "Tags": [],
+        "Studios": [],
+        "People": [],
+        "ProviderIds": {},
+        "LockedFields": [],
+    }
 
-    jellyfin.update_item(row["jellyfin_item_id"], patched)
+    if plex_meta.get("year") is not None:
+        payload["ProductionYear"] = plex_meta.get("year")
+    if plex_meta.get("originally_available_at"):
+        payload["PremiereDate"] = f"{plex_meta['originally_available_at']}T00:00:00.0000000Z"
+    if plex_meta.get("content_rating"):
+        payload["OfficialRating"] = plex_meta.get("content_rating")
+    if plex_meta.get("audience_rating") is not None:
+        payload["CommunityRating"] = plex_meta.get("audience_rating")
+
+    jellyfin.update_item(row["jellyfin_item_id"], payload)
 
     with connect() as conn:
         conn.execute(
             """
             UPDATE sync_items
             SET jellyfin_title = ?, jellyfin_year = ?, match_warning = '',
-                identity_synced_at = CURRENT_TIMESTAMP, identity_sync_status = 'applied', identity_sync_error = ''
+                identity_synced_at = CURRENT_TIMESTAMP,
+                identity_sync_status = 'applied', identity_sync_error = ''
             WHERE id = ?
             """,
             (plex_meta.get("title"), plex_meta.get("year"), sync_item_id),
