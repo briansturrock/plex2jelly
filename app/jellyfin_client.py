@@ -74,7 +74,11 @@ class JellyfinClient:
     def update_item(self, item_id: str, item: dict[str, object]) -> None:
         headers = {**self.headers, "Content-Type": "application/json"}
         response = requests.post(self._url(f"/Items/{item_id}"), headers=headers, json=item, timeout=self.timeout)
-        response.raise_for_status()
+        if not response.ok:
+            body = (response.text or "").strip().replace("\n", " ")
+            if len(body) > 500:
+                body = body[:500] + "..."
+            raise RuntimeError(f"Jellyfin update failed: HTTP {response.status_code} {response.reason}. {body}")
 
 
 def _int_or_none(value: object) -> int | None:

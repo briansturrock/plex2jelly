@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from flask import Flask, flash, redirect, render_template, request, url_for
+from flask import Flask, current_app, flash, redirect, render_template, request, url_for
 
 from app import __version__
 from app.config import AppConfig
@@ -326,6 +326,7 @@ def create_app() -> Flask:
         applied = 0
         failed = 0
         skipped = 0
+        errors: list[str] = []
 
         for sync_item_id in selected_ids:
             try:
@@ -336,10 +337,16 @@ def create_app() -> Flask:
                     skipped += 1
             except Exception as exc:
                 failed += 1
-                _record_identity_failure(sync_item_id, str(exc))
+                error_text = str(exc)
+                errors.append(error_text)
+                current_app.logger.exception("Identity overwrite failed for sync_item_id=%s: %s", sync_item_id, error_text)
+                _record_identity_failure(sync_item_id, error_text)
 
         category = "success" if failed == 0 else "error"
-        flash(f"Identity overwrite complete: {applied} applied, {skipped} skipped, {failed} failed.", category)
+        message = f"Identity overwrite complete: {applied} applied, {skipped} skipped, {failed} failed."
+        if errors:
+            message += f" First error: {errors[0]}"
+        flash(message, category)
         return redirect(url_for("match_preview", library_mapping_id=return_mapping_id, filter="issues"))
 
     return app
