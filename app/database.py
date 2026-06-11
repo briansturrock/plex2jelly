@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
 
 CREATE TABLE IF NOT EXISTS path_mappings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    library_mapping_id INTEGER,
     plex_path TEXT NOT NULL,
     jellyfin_path TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1,
@@ -87,9 +88,20 @@ def connect() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return any(row["name"] == column for row in rows)
+
+
+def _run_migrations(conn: sqlite3.Connection) -> None:
+    if not _column_exists(conn, "path_mappings", "library_mapping_id"):
+        conn.execute("ALTER TABLE path_mappings ADD COLUMN library_mapping_id INTEGER")
+
+
 def init_db() -> None:
     with connect() as conn:
         conn.executescript(SCHEMA)
+        _run_migrations(conn)
 
 
 def get_setting(key: str, default: str = "") -> str:

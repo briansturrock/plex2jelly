@@ -3,18 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>plex2jelly</title>
+  <title>plex2jelly {{ app_version }}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
   <header>
-    <h1>plex2jelly</h1>
+    <h1>plex2jelly <span class="version">{{ app_version }}</span></h1>
     <nav>
       <a href="{{ url_for('index') }}">Dashboard</a>
       <a href="{{ url_for('settings') }}">Settings</a>
       <a href="{{ url_for('health') }}">Health</a>
-      <a href="{{ url_for('paths') }}">Path mappings</a>
       <a href="{{ url_for('libraries') }}">Libraries</a>
+      <a href="{{ url_for('paths') }}">Path mappings</a>
     </nav>
   </header>
   <main>

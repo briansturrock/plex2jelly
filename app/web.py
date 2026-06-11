@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from flask import Flask, flash, redirect, render_template, request, url_for
 
+from app import __version__
 from app.config import AppConfig
 from app.database import (
     connect,
@@ -18,6 +19,10 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.secret_key = "plex2jelly-local-setup"
     init_db()
+
+    @app.context_processor
+    def inject_version():
+        return {"app_version": __version__}
 
     @app.route("/")
     def index():
@@ -69,22 +74,54 @@ def create_app() -> Flask:
 
     @app.route("/paths", methods=["GET", "POST"])
     def paths():
+        with connect() as conn:
+            library_mappings = conn.execute(
+                """
+                SELECT id, name, plex_library_name, jellyfin_library_name, media_type, enabled
+                FROM library_mappings
+                ORDER BY name COLLATE NOCASE
+                """
+            ).fetchall()
+
         if request.method == "POST":
+            library_mapping_id = request.form.get("library_mapping_id", "").strip()
             plex_path = request.form.get("plex_path", "").strip().rstrip("/")
             jellyfin_path = request.form.get("jellyfin_path", "").strip().rstrip("/")
-            if plex_path and jellyfin_path:
+            if not library_mapping_id:
+                flash("Select a library mapping first.", "error")
+            elif plex_path and jellyfin_path:
                 with connect() as conn:
                     conn.execute(
-                        "INSERT INTO path_mappings(plex_path, jellyfin_path, enabled) VALUES (?, ?, 1)",
-                        (plex_path, jellyfin_path),
+                        """
+                        INSERT INTO path_mappings(library_mapping_id, plex_path, jellyfin_path, enabled)
+                        VALUES (?, ?, ?, 1)
+                        """,
+                        (int(library_mapping_id), plex_path, jellyfin_path),
                     )
                 flash("Path mapping added.", "success")
             else:
                 flash("Both paths are required.", "error")
             return redirect(url_for("paths"))
+
         with connect() as conn:
-            rows = conn.execute("SELECT * FROM path_mappings ORDER BY id").fetchall()
-        return render_template("paths.html", rows=rows)
+            rows = conn.execute(
+                """
+                SELECT
+                    pm.id,
+                    pm.library_mapping_id,
+                    pm.plex_path,
+                    pm.jellyfin_path,
+                    pm.enabled,
+                    lm.name AS library_name,
+                    lm.plex_library_name,
+                    lm.jellyfin_library_name,
+                    lm.media_type
+                FROM path_mappings pm
+                LEFT JOIN library_mappings lm ON lm.id = pm.library_mapping_id
+                ORDER BY COALESCE(lm.name, 'Unscoped') COLLATE NOCASE, pm.id
+                """
+            ).fetchall()
+        return render_template("paths.html", rows=rows, library_mappings=library_mappings)
 
     @app.post("/paths/<int:mapping_id>/delete")
     def delete_path(mapping_id: int):
@@ -164,8 +201,9 @@ def create_app() -> Flask:
     @app.post("/libraries/<int:mapping_id>/delete")
     def delete_library(mapping_id: int):
         with connect() as conn:
+            conn.execute("DELETE FROM path_mappings WHERE library_mapping_id = ?", (mapping_id,))
             conn.execute("DELETE FROM library_mappings WHERE id = ?", (mapping_id,))
-        flash("Library mapping deleted.", "success")
+        flash("Library mapping and linked path mappings deleted.", "success")
         return redirect(url_for("libraries"))
 
     @app.post("/libraries/<int:mapping_id>/toggle")
