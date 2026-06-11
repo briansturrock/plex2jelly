@@ -35,19 +35,31 @@ def create_app() -> Flask:
     @app.route("/health")
     def health():
         cfg = AppConfig.load()
-        checks = []
-        checks.append(("Database", True, "OK"))
-        if cfg.has_plex:
-            ok, msg = PlexClient(cfg.plex_base_url, cfg.plex_token).test()
-            checks.append(("Plex", ok, msg))
-        else:
-            checks.append(("Plex", False, "Not configured"))
-        if cfg.has_jellyfin:
-            ok, msg = JellyfinClient(cfg.jellyfin_base_url, cfg.jellyfin_api_key).test()
-            checks.append(("Jellyfin", ok, msg))
-        else:
-            checks.append(("Jellyfin", False, "Not configured"))
+        checks = [
+            ("Database", True, "OK"),
+            ("Plex", cfg.has_plex, "Configured" if cfg.has_plex else "Not configured"),
+            ("Jellyfin", cfg.has_jellyfin, "Configured" if cfg.has_jellyfin else "Not configured"),
+        ]
         return render_template("health.html", checks=checks)
+
+    @app.post("/health/test/<service>")
+    def test_health_service(service: str):
+        cfg = AppConfig.load()
+        if service == "plex":
+            if not cfg.has_plex:
+                flash("Plex is not configured.", "error")
+            else:
+                ok, msg = PlexClient(cfg.plex_base_url, cfg.plex_token, timeout=5).test()
+                flash(f"Plex: {msg}", "success" if ok else "error")
+        elif service == "jellyfin":
+            if not cfg.has_jellyfin:
+                flash("Jellyfin is not configured.", "error")
+            else:
+                ok, msg = JellyfinClient(cfg.jellyfin_base_url, cfg.jellyfin_api_key, timeout=5).test()
+                flash(f"Jellyfin: {msg}", "success" if ok else "error")
+        else:
+            flash("Unknown health check.", "error")
+        return redirect(url_for("health"))
 
     @app.route("/paths", methods=["GET", "POST"])
     def paths():

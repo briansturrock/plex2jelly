@@ -9,7 +9,7 @@ import requests
 class JellyfinClient:
     base_url: str
     api_key: str
-    timeout: int = 15
+    timeout: int = 5
 
     def _url(self, path: str) -> str:
         return self.base_url.rstrip("/") + path

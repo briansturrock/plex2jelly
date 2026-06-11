@@ -11,7 +11,7 @@ import requests
 class PlexClient:
     base_url: str
     token: str
-    timeout: int = 15
+    timeout: int = 5
 
     def _url(self, path: str) -> str:
         return self.base_url.rstrip("/") + path
