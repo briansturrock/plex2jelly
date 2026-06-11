@@ -19,7 +19,7 @@ nav a {
 }
 main {
   padding: 2rem;
-  max-width: 1100px;
+  max-width: 1200px;
 }
 .card {
   background: white;
@@ -28,15 +28,31 @@ main {
   margin-bottom: 1rem;
   box-shadow: 0 1px 3px rgba(0,0,0,0.12);
 }
-.grid {
+.grid, .two-col {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 1rem;
+}
+.button-row, .actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
 }
 label {
   display: block;
   margin-bottom: 1rem;
   font-weight: bold;
+}
+.checkbox-label {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  font-weight: normal;
+}
+.checkbox-label input {
+  width: auto;
+  margin: 0;
 }
 input, select {
   display: block;
@@ -63,35 +79,25 @@ table {
 }
 th, td {
   text-align: left;
-  border-bottom: 1px solid #ddd;
-  padding: 0.6rem;
+  padding: 0.5rem;
+  border-bottom: 1px solid #e0e0e0;
   vertical-align: top;
 }
+.ok, .success {
+  color: #137333;
+}
+.bad, .error {
+  color: #b3261e;
+}
 .flash {
-  padding: 0.75rem;
+  background: white;
+  border-left: 4px solid #5f6368;
+  padding: 0.75rem 1rem;
   margin-bottom: 1rem;
-  border-radius: 4px;
 }
 .flash.success {
-  background: #e6f4ea;
+  border-left-color: #137333;
 }
 .flash.error {
-  background: #fce8e6;
-}
-.ok {
-  color: #188038;
-  font-weight: bold;
-}
-.bad {
-  color: #c5221f;
-  font-weight: bold;
-}
-.inline-form {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 1rem;
-  align-items: end;
-}
-.inline-form label {
-  margin-bottom: 0;
+  border-left-color: #b3261e;
 }

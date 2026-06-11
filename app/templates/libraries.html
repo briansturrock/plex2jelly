@@ -1,11 +1,54 @@
 {% extends "base.html" %}
 {% block content %}
 <section class="card">
-  <h2>Library mappings</h2>
-  {% if not cfg.has_plex or not cfg.has_jellyfin %}
-    <p>Configure Plex and Jellyfin first.</p>
-  {% elif discovery_error %}
-    <p class="bad">Library discovery failed: {{ discovery_error }}</p>
+  <h2>Library discovery</h2>
+  <p>Discovery only runs when you click a button. Saved results are used for mapping.</p>
+  <div class="button-row">
+    <form method="post" action="{{ url_for('discover_libraries', source='plex') }}">
+      <button type="submit">Discover Plex libraries</button>
+    </form>
+    <form method="post" action="{{ url_for('discover_libraries', source='jellyfin') }}">
+      <button type="submit">Discover Jellyfin libraries</button>
+    </form>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Discovered libraries</h2>
+  <div class="two-col">
+    <div>
+      <h3>Plex</h3>
+      <table>
+        <thead><tr><th>Name</th><th>Type</th><th>Key</th></tr></thead>
+        <tbody>
+          {% for lib in plex_libraries %}
+          <tr><td>{{ lib.name }}</td><td>{{ lib.media_type }}</td><td>{{ lib.source_id }}</td></tr>
+          {% else %}
+          <tr><td colspan="3">No Plex libraries discovered yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <h3>Jellyfin</h3>
+      <table>
+        <thead><tr><th>Name</th><th>Type</th><th>Id</th></tr></thead>
+        <tbody>
+          {% for lib in jellyfin_libraries %}
+          <tr><td>{{ lib.name }}</td><td>{{ lib.media_type }}</td><td>{{ lib.source_id }}</td></tr>
+          {% else %}
+          <tr><td colspan="3">No Jellyfin libraries discovered yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Add library mapping</h2>
+  {% if not plex_libraries or not jellyfin_libraries %}
+    <p>Discover both Plex and Jellyfin libraries before adding mappings.</p>
   {% else %}
     <form method="post" class="inline-form">
       <label>Mapping name
@@ -14,14 +57,14 @@
       <label>Plex library
         <select name="plex_library">
           {% for lib in plex_libraries %}
-          <option value="{{ lib.key }}|{{ lib.title }}">{{ lib.title }} ({{ lib.type }})</option>
+          <option value="{{ lib.source_id }}|{{ lib.name }}">{{ lib.name }} ({{ lib.media_type }})</option>
           {% endfor %}
         </select>
       </label>
       <label>Jellyfin library
         <select name="jellyfin_library">
           {% for lib in jellyfin_libraries %}
-          <option value="{{ lib.id }}|{{ lib.name }}">{{ lib.name }} ({{ lib.type }})</option>
+          <option value="{{ lib.source_id }}|{{ lib.name }}">{{ lib.name }} ({{ lib.media_type }})</option>
           {% endfor %}
         </select>
       </label>
@@ -32,14 +75,19 @@
           <option value="unknown">unknown</option>
         </select>
       </label>
+      <label class="checkbox-label">
+        <input type="checkbox" name="enabled" checked>
+        Enabled
+      </label>
       <button type="submit">Add mapping</button>
     </form>
   {% endif %}
 </section>
+
 <section class="card">
   <h2>Current mappings</h2>
   <table>
-    <thead><tr><th>Name</th><th>Plex</th><th>Jellyfin</th><th>Type</th><th></th></tr></thead>
+    <thead><tr><th>Name</th><th>Plex</th><th>Jellyfin</th><th>Type</th><th>Enabled</th><th>Actions</th></tr></thead>
     <tbody>
       {% for row in mappings %}
       <tr>
@@ -47,14 +95,18 @@
         <td>{{ row.plex_library_name }}</td>
         <td>{{ row.jellyfin_library_name }}</td>
         <td>{{ row.media_type }}</td>
-        <td>
+        <td>{{ 'Yes' if row.enabled else 'No' }}</td>
+        <td class="actions">
+          <form method="post" action="{{ url_for('toggle_library', mapping_id=row.id) }}">
+            <button type="submit" class="secondary">{{ 'Disable' if row.enabled else 'Enable' }}</button>
+          </form>
           <form method="post" action="{{ url_for('delete_library', mapping_id=row.id) }}">
             <button type="submit" class="secondary">Delete</button>
           </form>
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="5">No library mappings yet.</td></tr>
+      <tr><td colspan="6">No library mappings yet.</td></tr>
       {% endfor %}
     </tbody>
   </table>

@@ -21,6 +21,15 @@ CREATE TABLE IF NOT EXISTS path_mappings (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS discovered_libraries (
+    source TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    media_type TEXT NOT NULL DEFAULT 'unknown',
+    last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(source, source_id)
+);
+
 CREATE TABLE IF NOT EXISTS library_mappings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -105,3 +114,36 @@ def get_settings() -> dict[str, str]:
     with connect() as conn:
         rows = conn.execute("SELECT key, value FROM app_settings ORDER BY key").fetchall()
         return {row["key"]: row["value"] for row in rows}
+
+
+def replace_discovered_libraries(source: str, libraries: list[dict[str, str]]) -> None:
+    init_db()
+    with connect() as conn:
+        conn.execute("DELETE FROM discovered_libraries WHERE source = ?", (source,))
+        for item in libraries:
+            source_id = str(item.get("key") or item.get("id") or "").strip()
+            name = str(item.get("title") or item.get("name") or "").strip()
+            media_type = str(item.get("type") or "unknown").strip() or "unknown"
+            if not source_id or not name:
+                continue
+            conn.execute(
+                """
+                INSERT INTO discovered_libraries(source, source_id, name, media_type, last_seen_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (source, source_id, name, media_type),
+            )
+
+
+def get_discovered_libraries(source: str) -> list[sqlite3.Row]:
+    init_db()
+    with connect() as conn:
+        return conn.execute(
+            """
+            SELECT source, source_id, name, media_type, last_seen_at
+            FROM discovered_libraries
+            WHERE source = ?
+            ORDER BY name COLLATE NOCASE
+            """,
+            (source,),
+        ).fetchall()

@@ -3,7 +3,13 @@ from __future__ import annotations
 from flask import Flask, flash, redirect, render_template, request, url_for
 
 from app.config import AppConfig
-from app.database import connect, init_db, set_setting
+from app.database import (
+    connect,
+    get_discovered_libraries,
+    init_db,
+    replace_discovered_libraries,
+    set_setting,
+)
 from app.jellyfin_client import JellyfinClient
 from app.plex_client import PlexClient
 
@@ -64,8 +70,8 @@ def create_app() -> Flask:
     @app.route("/paths", methods=["GET", "POST"])
     def paths():
         if request.method == "POST":
-            plex_path = request.form.get("plex_path", "").strip()
-            jellyfin_path = request.form.get("jellyfin_path", "").strip()
+            plex_path = request.form.get("plex_path", "").strip().rstrip("/")
+            jellyfin_path = request.form.get("jellyfin_path", "").strip().rstrip("/")
             if plex_path and jellyfin_path:
                 with connect() as conn:
                     conn.execute(
@@ -90,57 +96,86 @@ def create_app() -> Flask:
     @app.route("/libraries", methods=["GET", "POST"])
     def libraries():
         cfg = AppConfig.load()
-        plex_libraries = []
-        jellyfin_libraries = []
-        discovery_error = None
-        if cfg.has_plex and cfg.has_jellyfin:
-            try:
-                plex_libraries = PlexClient(cfg.plex_base_url, cfg.plex_token).libraries()
-                jellyfin_libraries = JellyfinClient(cfg.jellyfin_base_url, cfg.jellyfin_api_key).libraries()
-            except Exception as exc:
-                discovery_error = str(exc)
-
         if request.method == "POST":
             plex_value = request.form.get("plex_library", "")
             jellyfin_value = request.form.get("jellyfin_library", "")
             name = request.form.get("name", "").strip()
             media_type = request.form.get("media_type", "unknown").strip() or "unknown"
+            enabled = 1 if request.form.get("enabled") == "on" else 0
+
             if "|" not in plex_value or "|" not in jellyfin_value:
                 flash("Select both a Plex and Jellyfin library.", "error")
                 return redirect(url_for("libraries"))
+
             plex_key, plex_name = plex_value.split("|", 1)
             jellyfin_id, jellyfin_name = jellyfin_value.split("|", 1)
             if not name:
                 name = plex_name
+
             with connect() as conn:
                 conn.execute(
                     """
                     INSERT INTO library_mappings(
                         name, plex_library_key, plex_library_name,
                         jellyfin_library_id, jellyfin_library_name, media_type, enabled
-                    ) VALUES (?, ?, ?, ?, ?, ?, 1)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (name, plex_key, plex_name, jellyfin_id, jellyfin_name, media_type),
+                    (name, plex_key, plex_name, jellyfin_id, jellyfin_name, media_type, enabled),
                 )
             flash("Library mapping added.", "success")
             return redirect(url_for("libraries"))
 
         with connect() as conn:
             mappings = conn.execute("SELECT * FROM library_mappings ORDER BY id").fetchall()
+        plex_libraries = get_discovered_libraries("plex")
+        jellyfin_libraries = get_discovered_libraries("jellyfin")
         return render_template(
             "libraries.html",
             cfg=cfg,
             plex_libraries=plex_libraries,
             jellyfin_libraries=jellyfin_libraries,
             mappings=mappings,
-            discovery_error=discovery_error,
         )
+
+    @app.post("/libraries/discover/<source>")
+    def discover_libraries(source: str):
+        cfg = AppConfig.load()
+        try:
+            if source == "plex":
+                if not cfg.has_plex:
+                    flash("Plex is not configured.", "error")
+                else:
+                    libraries = PlexClient(cfg.plex_base_url, cfg.plex_token, timeout=10).libraries()
+                    replace_discovered_libraries("plex", libraries)
+                    flash(f"Discovered {len(libraries)} Plex libraries.", "success")
+            elif source == "jellyfin":
+                if not cfg.has_jellyfin:
+                    flash("Jellyfin is not configured.", "error")
+                else:
+                    libraries = JellyfinClient(cfg.jellyfin_base_url, cfg.jellyfin_api_key, timeout=10).libraries()
+                    replace_discovered_libraries("jellyfin", libraries)
+                    flash(f"Discovered {len(libraries)} Jellyfin libraries.", "success")
+            else:
+                flash("Unknown library source.", "error")
+        except Exception as exc:
+            flash(f"Library discovery failed: {exc}", "error")
+        return redirect(url_for("libraries"))
 
     @app.post("/libraries/<int:mapping_id>/delete")
     def delete_library(mapping_id: int):
         with connect() as conn:
             conn.execute("DELETE FROM library_mappings WHERE id = ?", (mapping_id,))
         flash("Library mapping deleted.", "success")
+        return redirect(url_for("libraries"))
+
+    @app.post("/libraries/<int:mapping_id>/toggle")
+    def toggle_library(mapping_id: int):
+        with connect() as conn:
+            conn.execute(
+                "UPDATE library_mappings SET enabled = CASE enabled WHEN 1 THEN 0 ELSE 1 END WHERE id = ?",
+                (mapping_id,),
+            )
+        flash("Library mapping updated.", "success")
         return redirect(url_for("libraries"))
 
     return app
