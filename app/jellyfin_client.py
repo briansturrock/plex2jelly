@@ -23,6 +23,20 @@ class JellyfinClient:
             "Accept": "application/json",
         }
 
+    @property
+    def write_headers(self) -> dict[str, str]:
+        return {
+            "Authorization": (
+                'MediaBrowser Client="plex2jelly", '
+                'Device="plex2jelly", '
+                'DeviceId="plex2jelly-docker", '
+                'Version="0.3.8", '
+                f'Token="{self.api_key}"'
+            ),
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+
     def test(self) -> tuple[bool, str]:
         try:
             response = requests.get(self._url("/System/Info"), headers=self.headers, timeout=self.timeout)
@@ -38,6 +52,7 @@ class JellyfinClient:
         response = requests.get(self._url("/Library/VirtualFolders"), headers=self.headers, timeout=self.timeout)
         response.raise_for_status()
         data = response.json()
+
         libraries: list[dict[str, str]] = []
         for item in data:
             name = item.get("Name", "")
@@ -57,6 +72,7 @@ class JellyfinClient:
         response = requests.get(self._url("/Items"), headers=self.headers, params=params, timeout=self.timeout)
         response.raise_for_status()
         data = response.json()
+
         items: list[dict[str, object]] = []
         for item in data.get("Items", []):
             ticks = item.get("RunTimeTicks")
@@ -79,17 +95,26 @@ class JellyfinClient:
         return response.json()
 
     def update_item(self, item_id: str, item: dict[str, Any]) -> None:
-        headers = {**self.headers, "Content-Type": "application/json"}
-        response = requests.post(self._url(f"/Items/{item_id}"), headers=headers, json=item, timeout=self.timeout)
-        if not response.ok:
-            body = (response.text or "").strip().replace("\n", " ")
-            if len(body) > 800:
-                body = body[:800] + "..."
-            fields = ", ".join(sorted(item.keys()))
-            raise RuntimeError(
-                f"Jellyfin update failed: HTTP {response.status_code} {response.reason}. "
-                f"Fields sent: {fields}. Response: {body or '<empty>'}"
-            )
+        response = requests.post(self._url(f"/Items/{item_id}"), headers=self.write_headers, json=item, timeout=self.timeout)
+        self._raise_update_error_if_needed(response, item)
+
+    def update_item_metadata_editor_payload(self, item_id: str, item: dict[str, Any]) -> None:
+        response = requests.post(self._url(f"/Items/{item_id}"), headers=self.write_headers, json=item, timeout=self.timeout)
+        self._raise_update_error_if_needed(response, item)
+
+    def _raise_update_error_if_needed(self, response: requests.Response, item: dict[str, Any]) -> None:
+        if response.ok:
+            return
+
+        body = (response.text or "").strip().replace("\n", " ")
+        if len(body) > 800:
+            body = body[:800] + "..."
+
+        fields = ", ".join(sorted(item.keys()))
+        raise RuntimeError(
+            f"Jellyfin update failed: HTTP {response.status_code} {response.reason}. "
+            f"Fields sent: {fields}. Response: {body or ''}"
+        )
 
 
 def _int_or_none(value: object) -> int | None:

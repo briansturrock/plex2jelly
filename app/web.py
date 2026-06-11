@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from typing import Any
+
 from flask import Flask, current_app, flash, redirect, render_template, request, url_for
 
 from app import __version__
@@ -16,7 +18,7 @@ from app.jellyfin_client import JellyfinClient
 from app.matcher import canonicalise_path, warning_reasons
 from app.plex_client import PlexClient
 
-METADATA_SCOPE_VERSION = "movie_core_v1"
+METADATA_SCOPE_VERSION = "movie_core_v3_web_payload"
 METADATA_FIELDS = [
     "Name",
     "OriginalTitle",
@@ -24,7 +26,7 @@ METADATA_FIELDS = [
     "ProductionYear",
     "PremiereDate",
     "Overview",
-    "Tagline",
+    "Taglines",
     "OfficialRating",
     "CommunityRating",
 ]
@@ -97,12 +99,10 @@ def create_app() -> Flask:
                 ORDER BY name COLLATE NOCASE
                 """
             ).fetchall()
-
         if request.method == "POST":
             library_mapping_id = request.form.get("library_mapping_id", "").strip()
             plex_path = request.form.get("plex_path", "").strip().rstrip("/")
             jellyfin_path = request.form.get("jellyfin_path", "").strip().rstrip("/")
-
             if not library_mapping_id:
                 flash("Select a library mapping first.", "error")
             elif plex_path and jellyfin_path:
@@ -118,7 +118,6 @@ def create_app() -> Flask:
             else:
                 flash("Both paths are required.", "error")
             return redirect(url_for("paths"))
-
         with connect() as conn:
             rows = conn.execute(
                 """
@@ -147,39 +146,31 @@ def create_app() -> Flask:
             name = request.form.get("name", "").strip()
             media_type = request.form.get("media_type", "unknown").strip() or "unknown"
             enabled = 1 if request.form.get("enabled") == "on" else 0
-
             if "|" not in plex_value or "|" not in jellyfin_value:
                 flash("Select both a Plex and Jellyfin library.", "error")
                 return redirect(url_for("libraries"))
-
             plex_key, plex_name = plex_value.split("|", 1)
             jellyfin_id, jellyfin_name = jellyfin_value.split("|", 1)
             if not name:
                 name = plex_name
-
             with connect() as conn:
                 conn.execute(
                     """
-                    INSERT INTO library_mappings(
-                        name, plex_library_key, plex_library_name,
-                        jellyfin_library_id, jellyfin_library_name,
-                        media_type, enabled
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO library_mappings(name, plex_library_key, plex_library_name, jellyfin_library_id,
+                                                 jellyfin_library_name, media_type, enabled)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (name, plex_key, plex_name, jellyfin_id, jellyfin_name, media_type, enabled),
                 )
             flash("Library mapping added.", "success")
             return redirect(url_for("libraries"))
-
         with connect() as conn:
             mappings = conn.execute("SELECT * FROM library_mappings ORDER BY id").fetchall()
-        plex_libraries = get_discovered_libraries("plex")
-        jellyfin_libraries = get_discovered_libraries("jellyfin")
         return render_template(
             "libraries.html",
             cfg=cfg,
-            plex_libraries=plex_libraries,
-            jellyfin_libraries=jellyfin_libraries,
+            plex_libraries=get_discovered_libraries("plex"),
+            jellyfin_libraries=get_discovered_libraries("jellyfin"),
             mappings=mappings,
         )
 
@@ -250,7 +241,6 @@ def create_app() -> Flask:
         page_size = _safe_int(request.args.get("page_size"), 50, minimum=10, maximum=500)
         page = _safe_int(request.args.get("page"), 1, minimum=1, maximum=999999)
         offset = (page - 1) * page_size
-
         with connect() as conn:
             mappings = conn.execute(
                 """
@@ -259,7 +249,6 @@ def create_app() -> Flask:
                 ORDER BY name COLLATE NOCASE
                 """
             ).fetchall()
-
             params: list[object] = []
             where = []
             if selected_mapping_id:
@@ -274,18 +263,16 @@ def create_app() -> Flask:
                     where.append("match_status = ?")
                     params.append(status_filter)
             where_sql = " WHERE " + " AND ".join(f"({w})" for w in where) if where else ""
-
             stats = conn.execute(
                 f"""
-                SELECT
-                    COUNT(*) AS total,
-                    SUM(CASE WHEN match_status = 'matched' THEN 1 ELSE 0 END) AS matched,
-                    SUM(CASE WHEN COALESCE(match_warning, '') != '' THEN 1 ELSE 0 END) AS warnings,
-                    SUM(CASE WHEN match_status = 'unmatched_plex' THEN 1 ELSE 0 END) AS unmatched_plex,
-                    SUM(CASE WHEN match_status = 'unmatched_jellyfin' THEN 1 ELSE 0 END) AS unmatched_jellyfin,
-                    SUM(CASE WHEN match_status = 'path_failure' THEN 1 ELSE 0 END) AS path_failure,
-                    SUM(CASE WHEN metadata_scope_version = ? AND metadata_sync_status = 'applied' THEN 1 ELSE 0 END) AS metadata_current,
-                    SUM(CASE WHEN metadata_sync_status = 'failed' THEN 1 ELSE 0 END) AS metadata_failed
+                SELECT COUNT(*) AS total,
+                       SUM(CASE WHEN match_status = 'matched' THEN 1 ELSE 0 END) AS matched,
+                       SUM(CASE WHEN COALESCE(match_warning, '') != '' THEN 1 ELSE 0 END) AS warnings,
+                       SUM(CASE WHEN match_status = 'unmatched_plex' THEN 1 ELSE 0 END) AS unmatched_plex,
+                       SUM(CASE WHEN match_status = 'unmatched_jellyfin' THEN 1 ELSE 0 END) AS unmatched_jellyfin,
+                       SUM(CASE WHEN match_status = 'path_failure' THEN 1 ELSE 0 END) AS path_failure,
+                       SUM(CASE WHEN metadata_scope_version = ? AND metadata_sync_status = 'applied' THEN 1 ELSE 0 END) AS metadata_current,
+                       SUM(CASE WHEN metadata_sync_status = 'failed' THEN 1 ELSE 0 END) AS metadata_failed
                 FROM sync_items{where_sql}
                 """,
                 [METADATA_SCOPE_VERSION, *params],
@@ -297,14 +284,12 @@ def create_app() -> Flask:
                 FROM sync_items si
                 JOIN library_mappings lm ON lm.id = si.library_mapping_id
                 {where_sql}
-                ORDER BY
-                    CASE WHEN match_status = 'matched' AND COALESCE(match_warning, '') = '' THEN 1 ELSE 0 END,
-                    COALESCE(plex_title, jellyfin_title, canonical_path) COLLATE NOCASE
+                ORDER BY CASE WHEN match_status = 'matched' AND COALESCE(match_warning, '') = '' THEN 1 ELSE 0 END,
+                         COALESCE(plex_title, jellyfin_title, canonical_path) COLLATE NOCASE
                 LIMIT ? OFFSET ?
                 """,
                 [*params, page_size, offset],
             ).fetchall()
-
         total_pages = max(1, (total + page_size - 1) // page_size)
         return render_template(
             "match.html",
@@ -332,21 +317,16 @@ def create_app() -> Flask:
         cfg = AppConfig.load()
         selected_ids = [int(value) for value in request.form.getlist("sync_item_id") if value.isdigit()]
         return_mapping_id = request.form.get("library_mapping_id", "").strip()
-
         if not selected_ids:
             flash("Select at least one path-matched item to update.", "error")
             return redirect(url_for("match_preview", library_mapping_id=return_mapping_id, filter="issues"))
         if not cfg.has_plex or not cfg.has_jellyfin:
             flash("Plex and Jellyfin must be configured first.", "error")
             return redirect(url_for("match_preview", library_mapping_id=return_mapping_id, filter="issues"))
-
         plex = PlexClient(cfg.plex_base_url, cfg.plex_token, timeout=15)
         jellyfin = JellyfinClient(cfg.jellyfin_base_url, cfg.jellyfin_api_key, timeout=15)
-        applied = 0
-        failed = 0
-        skipped = 0
+        applied = failed = skipped = 0
         errors: list[str] = []
-
         for sync_item_id in selected_ids:
             try:
                 result = _apply_metadata_overwrite(sync_item_id, plex, jellyfin)
@@ -360,7 +340,6 @@ def create_app() -> Flask:
                 errors.append(error_text)
                 current_app.logger.exception("Metadata overwrite failed for sync_item_id=%s: %s", sync_item_id, error_text)
                 _record_metadata_failure(sync_item_id, error_text)
-
         category = "success" if failed == 0 else "error"
         message = f"Metadata overwrite complete: {applied} applied, {skipped} skipped, {failed} failed."
         if errors:
@@ -382,7 +361,6 @@ def _safe_int(value: object, default: int, minimum: int, maximum: int) -> int:
 def _run_match_preview(library_mapping_id: int, cfg: AppConfig) -> dict[str, int]:
     if not cfg.has_plex or not cfg.has_jellyfin:
         raise RuntimeError("Plex and Jellyfin must be configured first.")
-
     with connect() as conn:
         mapping = conn.execute("SELECT * FROM library_mappings WHERE id = ?", (library_mapping_id,)).fetchone()
         if not mapping:
@@ -393,31 +371,26 @@ def _run_match_preview(library_mapping_id: int, cfg: AppConfig) -> dict[str, int
         ).fetchall()
     if not path_rows:
         raise RuntimeError("Add a path mapping for this library first.")
-
     path_mappings = [dict(row) for row in path_rows]
     plex_items = PlexClient(cfg.plex_base_url, cfg.plex_token, timeout=30).library_items(mapping["plex_library_key"])
     jellyfin_items = JellyfinClient(cfg.jellyfin_base_url, cfg.jellyfin_api_key, timeout=30).library_items(
         mapping["jellyfin_library_id"], mapping["media_type"]
     )
-
     plex_by_path: dict[str, dict[str, object]] = {}
     jellyfin_by_path: dict[str, dict[str, object]] = {}
     results: list[dict[str, object]] = []
-
     for item in plex_items:
         canonical = canonicalise_path(str(item.get("path") or ""), path_mappings, "plex")
         if not item.get("path") or canonical == item.get("path"):
             results.append({"status": "path_failure", "canonical": canonical, "plex": item, "jellyfin": None, "warning": "plex path not mapped"})
         else:
             plex_by_path[canonical] = item
-
     for item in jellyfin_items:
         canonical = canonicalise_path(str(item.get("path") or ""), path_mappings, "jellyfin")
         if not item.get("path") or canonical == item.get("path"):
             results.append({"status": "path_failure", "canonical": canonical, "plex": None, "jellyfin": item, "warning": "jellyfin path not mapped"})
         else:
             jellyfin_by_path[canonical] = item
-
     for canonical, plex_item in plex_by_path.items():
         jellyfin_item = jellyfin_by_path.get(canonical)
         if not jellyfin_item:
@@ -433,11 +406,9 @@ def _run_match_preview(library_mapping_id: int, cfg: AppConfig) -> dict[str, int
         }
         warning = ", ".join(warning_reasons(row_for_warning))
         results.append({"status": "matched", "canonical": canonical, "plex": plex_item, "jellyfin": jellyfin_item, "warning": warning})
-
     for canonical, jellyfin_item in jellyfin_by_path.items():
         if canonical not in plex_by_path:
             results.append({"status": "unmatched_jellyfin", "canonical": canonical, "plex": None, "jellyfin": jellyfin_item, "warning": ""})
-
     with connect() as conn:
         previous_sync_state = {
             row["canonical_path"]: row
@@ -461,8 +432,8 @@ def _run_match_preview(library_mapping_id: int, cfg: AppConfig) -> dict[str, int
             conn.execute(
                 """
                 INSERT INTO sync_items(
-                    library_mapping_id, plex_rating_key, plex_guid, jellyfin_item_id, media_type,
-                    canonical_path, plex_path, jellyfin_path,
+                    library_mapping_id, plex_rating_key, plex_guid, jellyfin_item_id,
+                    media_type, canonical_path, plex_path, jellyfin_path,
                     plex_title, plex_year, plex_duration_ms,
                     jellyfin_title, jellyfin_year, jellyfin_duration_ms,
                     match_status, match_warning,
@@ -470,7 +441,8 @@ def _run_match_preview(library_mapping_id: int, cfg: AppConfig) -> dict[str, int
                     metadata_scope_version, metadata_fields,
                     identity_synced_at, identity_sync_status, identity_sync_error,
                     last_seen_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """,
                 (
                     library_mapping_id,
@@ -499,7 +471,6 @@ def _run_match_preview(library_mapping_id: int, cfg: AppConfig) -> dict[str, int
                     previous["identity_sync_error"] if previous else None,
                 ),
             )
-
     return {
         "matched": sum(1 for r in results if r["status"] == "matched"),
         "warnings": sum(1 for r in results if r.get("warning")),
@@ -512,56 +483,30 @@ def _run_match_preview(library_mapping_id: int, cfg: AppConfig) -> dict[str, int
 def _apply_metadata_overwrite(sync_item_id: int, plex: PlexClient, jellyfin: JellyfinClient) -> str:
     with connect() as conn:
         row = conn.execute("SELECT * FROM sync_items WHERE id = ?", (sync_item_id,)).fetchone()
-
     if not row or row["match_status"] != "matched" or not row["plex_rating_key"] or not row["canonical_path"]:
         _record_metadata_audit(sync_item_id, "skipped", "Item is not a path-matched Plex/Jellyfin pair.")
         return "skipped"
-
-    # Jellyfin item IDs can change after library rescans/metadata operations.
-    # The stable authority key for plex2jelly is the canonical mapped file path,
-    # so always rebind to the current Jellyfin item immediately before writing.
-    current_jellyfin_item = _find_current_jellyfin_item_by_path(row, jellyfin)
-    current_jellyfin_id = str(current_jellyfin_item.get("item_id") or "")
-    if not current_jellyfin_id:
-        raise RuntimeError(f"Could not rebind Jellyfin item by path: {row['canonical_path']}")
-
     plex_meta = plex.item_metadata(row["plex_rating_key"])
     if not plex_meta.get("title"):
         raise RuntimeError("Plex metadata did not include a title.")
-
-    payload = _build_metadata_payload(current_jellyfin_id, plex_meta)
-    jellyfin.update_item(current_jellyfin_id, payload)
-    metadata_fields = json.dumps(list(payload.keys()), sort_keys=True)
-
+    current_jellyfin_id = _find_current_jellyfin_item_id_by_path(row, jellyfin)
+    if not current_jellyfin_id:
+        raise RuntimeError("Could not rebind Jellyfin item by canonical path before metadata write.")
+    payload = _build_jellyfin_web_metadata_payload(current_jellyfin_id, plex_meta)
+    jellyfin.update_item_metadata_editor_payload(current_jellyfin_id, payload)
+    metadata_fields = json.dumps([field for field in METADATA_FIELDS if field in payload], sort_keys=True)
     with connect() as conn:
         conn.execute(
             """
             UPDATE sync_items
-            SET jellyfin_item_id = ?,
-                jellyfin_title = ?,
-                jellyfin_year = ?,
-                jellyfin_path = ?,
-                match_warning = '',
-                metadata_synced_at = CURRENT_TIMESTAMP,
-                metadata_sync_status = 'applied',
-                metadata_sync_error = '',
-                metadata_scope_version = ?,
-                metadata_fields = ?,
-                identity_synced_at = CURRENT_TIMESTAMP,
-                identity_sync_status = 'applied',
-                identity_sync_error = '',
+            SET jellyfin_item_id = ?, jellyfin_title = ?, jellyfin_year = ?, match_warning = '',
+                metadata_synced_at = CURRENT_TIMESTAMP, metadata_sync_status = 'applied', metadata_sync_error = NULL,
+                metadata_scope_version = ?, metadata_fields = ?,
+                identity_synced_at = CURRENT_TIMESTAMP, identity_sync_status = 'applied', identity_sync_error = NULL,
                 last_synced_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
-            (
-                current_jellyfin_id,
-                plex_meta.get("title"),
-                plex_meta.get("year"),
-                current_jellyfin_item.get("path"),
-                METADATA_SCOPE_VERSION,
-                metadata_fields,
-                sync_item_id,
-            ),
+            (current_jellyfin_id, plex_meta.get("title"), plex_meta.get("year"), METADATA_SCOPE_VERSION, metadata_fields, sync_item_id),
         )
         conn.execute(
             """
@@ -570,63 +515,118 @@ def _apply_metadata_overwrite(sync_item_id: int, plex: PlexClient, jellyfin: Jel
             """,
             (
                 sync_item_id,
-                f"Applied {METADATA_SCOPE_VERSION}: {plex_meta.get('title')} ({plex_meta.get('year') or ''}); "
-                f"jellyfin_id={current_jellyfin_id}; fields={metadata_fields}",
+                f"Applied {METADATA_SCOPE_VERSION}: {plex_meta.get('title')} ({plex_meta.get('year') or ''}); fields={metadata_fields}",
             ),
         )
     return "applied"
 
 
-def _find_current_jellyfin_item_by_path(row, jellyfin: JellyfinClient) -> dict[str, object]:
+def _find_current_jellyfin_item_id_by_path(row: Any, jellyfin: JellyfinClient) -> str | None:
     with connect() as conn:
         mapping = conn.execute("SELECT * FROM library_mappings WHERE id = ?", (row["library_mapping_id"],)).fetchone()
         path_rows = conn.execute(
             "SELECT plex_path, jellyfin_path FROM path_mappings WHERE library_mapping_id = ? AND enabled = 1",
             (row["library_mapping_id"],),
         ).fetchall()
-
-    if not mapping:
-        raise RuntimeError("Library mapping not found during Jellyfin rebind.")
-    if not path_rows:
-        raise RuntimeError("Path mapping not found during Jellyfin rebind.")
-
+    if not mapping or not path_rows:
+        return row["jellyfin_item_id"]
     path_mappings = [dict(path_row) for path_row in path_rows]
-    jellyfin_items = jellyfin.library_items(mapping["jellyfin_library_id"], mapping["media_type"])
-    matches: list[dict[str, object]] = []
-    for item in jellyfin_items:
+    matches: list[str] = []
+    for item in jellyfin.library_items(mapping["jellyfin_library_id"], mapping["media_type"]):
         canonical = canonicalise_path(str(item.get("path") or ""), path_mappings, "jellyfin")
         if canonical == row["canonical_path"]:
-            matches.append(item)
-
-    if not matches:
-        raise RuntimeError(f"Current Jellyfin item not found by path: {row['canonical_path']}")
+            item_id = str(item.get("item_id") or "")
+            if item_id:
+                matches.append(item_id)
+    if len(matches) == 1:
+        return matches[0]
     if len(matches) > 1:
-        ids = ", ".join(str(item.get("item_id") or "") for item in matches)
-        raise RuntimeError(f"Multiple Jellyfin items match path {row['canonical_path']}: {ids}")
-    return matches[0]
+        raise RuntimeError(f"Multiple current Jellyfin items match canonical path {row['canonical_path']}.")
+    return None
 
 
-def _build_metadata_payload(jellyfin_item_id: str, plex_meta: dict[str, object]) -> dict[str, object]:
-    payload: dict[str, object] = {
+def _build_jellyfin_web_metadata_payload(jellyfin_item_id: str, plex_meta: dict[str, object]) -> dict[str, object]:
+    title = _string(plex_meta.get("title"))
+    year = plex_meta.get("year")
+    return {
         "Id": jellyfin_item_id,
-        "Name": plex_meta.get("title") or "",
-        "OriginalTitle": plex_meta.get("original_title") or plex_meta.get("title") or "",
-        "ForcedSortName": plex_meta.get("sort_title") or plex_meta.get("title") or "",
+        "Name": title,
+        "OriginalTitle": _string(plex_meta.get("original_title")),
+        "ForcedSortName": _string(plex_meta.get("sort_title") or title),
+        "CommunityRating": _rating_or_blank(plex_meta.get("audience_rating")),
+        "CriticRating": "",
+        "IndexNumber": None,
+        "AirsBeforeSeasonNumber": "",
+        "AirsAfterSeasonNumber": "",
+        "AirsBeforeEpisodeNumber": "",
+        "ParentIndexNumber": None,
+        "DisplayOrder": "",
+        "Album": "",
+        "AlbumArtists": [],
+        "ArtistItems": [],
+        "Overview": _string(plex_meta.get("summary")),
+        "Status": "",
+        "AirDays": [],
+        "AirTime": "",
+        "Genres": [],
+        "Tags": [],
+        "Studios": [],
+        "PremiereDate": _premiere_date_or_none(plex_meta.get("originally_available_at")),
+        "DateCreated": None,
+        "EndDate": None,
+        "ProductionYear": str(year) if year is not None else "",
+        "Height": "",
+        "AspectRatio": "",
+        "Video3DFormat": "",
+        "OfficialRating": _string(plex_meta.get("content_rating")),
+        "CustomRating": "",
+        "People": [],
+        "LockData": False,
+        "LockedFields": [],
+        "ProviderIds": {
+            "Imdb": "",
+            "Tmdb": "",
+            "TmdbCollection": "",
+            "TvdbCollection": "",
+            "Tvdb": "",
+            "TvdbSlug": "",
+        },
+        "PreferredMetadataLanguage": "",
+        "PreferredMetadataCountryCode": "",
+        "Taglines": [_string(plex_meta.get("tagline"))] if plex_meta.get("tagline") else [],
     }
-    if plex_meta.get("year") is not None:
-        payload["ProductionYear"] = plex_meta.get("year")
-    if plex_meta.get("originally_available_at"):
-        payload["PremiereDate"] = f"{plex_meta['originally_available_at']}T00:00:00.0000000Z"
-    if plex_meta.get("summary"):
-        payload["Overview"] = plex_meta.get("summary")
-    if plex_meta.get("tagline"):
-        payload["Tagline"] = plex_meta.get("tagline")
-    if plex_meta.get("content_rating"):
-        payload["OfficialRating"] = plex_meta.get("content_rating")
-    rating = plex_meta.get("audience_rating")
-    if isinstance(rating, (int, float)) and 0 <= float(rating) <= 10:
-        payload["CommunityRating"] = float(rating)
-    return payload
+
+
+def _string(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _rating_or_blank(value: object) -> object:
+    try:
+        rating = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if 0 <= rating <= 10:
+        return rating
+    return ""
+
+
+def _premiere_date_or_none(value: object) -> str | None:
+    if not _valid_plex_date(value):
+        return None
+    return f"{value}T00:00:00.0000000Z"
+
+
+def _valid_plex_date(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    parts = value.split("-")
+    if len(parts) != 3:
+        return False
+    year, month, day = parts
+    return len(year) == 4 and len(month) == 2 and len(day) == 2 and all(part.isdigit() for part in parts)
 
 
 def _record_metadata_failure(sync_item_id: int, error: str) -> None:
@@ -634,10 +634,8 @@ def _record_metadata_failure(sync_item_id: int, error: str) -> None:
         conn.execute(
             """
             UPDATE sync_items
-            SET metadata_sync_status = 'failed',
-                metadata_sync_error = ?,
-                identity_sync_status = 'failed',
-                identity_sync_error = ?
+            SET metadata_sync_status = 'failed', metadata_sync_error = ?,
+                identity_sync_status = 'failed', identity_sync_error = ?
             WHERE id = ?
             """,
             (error, error, sync_item_id),
