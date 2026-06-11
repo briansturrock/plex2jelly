@@ -6,7 +6,7 @@
   {% if not mappings %}
     <p>Add a library mapping first.</p>
   {% else %}
-    <form method="post" class="inline-form">
+    <form method="post" class="inline-form loading-form">
       <label>Library mapping
         <select name="library_mapping_id">
           {% for mapping in mappings %}
@@ -14,7 +14,8 @@
           {% endfor %}
         </select>
       </label>
-      <button type="submit">Run preview scan</button>
+      <button type="submit" data-loading-text="Scanning…">Run preview scan</button>
+      <div class="loading-indicator" hidden><span class="spinner"></span> Scanning library. This can take a while.</div>
     </form>
   {% endif %}
 </section>
@@ -69,42 +70,65 @@
     {% endif %}
   </div>
 
-  <table>
-    <thead>
-      <tr>
-        <th>Status</th>
-        <th>Plex</th>
-        <th>Jellyfin</th>
-        <th>Canonical path</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for row in rows %}
-      <tr>
-        <td>
-          {% if row.match_status == 'matched' and not row.match_warning %}
-            <span class="ok">matched</span>
-          {% elif row.match_status == 'matched' and row.match_warning %}
-            <span class="warn">warning</span><br><small>{{ row.match_warning }}</small>
-          {% else %}
-            <span class="bad">{{ row.match_status }}</span>
-          {% endif %}
-        </td>
-        <td>
-          {{ row.plex_title or '—' }}{% if row.plex_year %} ({{ row.plex_year }}){% endif %}<br>
-          <small>{{ row.plex_path or '' }}</small>
-        </td>
-        <td>
-          {{ row.jellyfin_title or '—' }}{% if row.jellyfin_year %} ({{ row.jellyfin_year }}){% endif %}<br>
-          <small>{{ row.jellyfin_path or '' }}</small>
-        </td>
-        <td><small>{{ row.canonical_path }}</small></td>
-      </tr>
-      {% else %}
-      <tr><td colspan="4">No preview results yet. Run a preview scan.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <form method="post" action="{{ url_for('apply_identity') }}" class="loading-form">
+    <input type="hidden" name="library_mapping_id" value="{{ selected_mapping_id }}">
+    <div class="actions">
+      <button type="submit" data-loading-text="Applying…">Apply selected identity overwrites</button>
+      <div class="loading-indicator" hidden><span class="spinner"></span> Applying selected Jellyfin updates.</div>
+    </div>
+    <p><small>Only path-matched rows can be selected. This writes Plex identity fields to Jellyfin; it does not sync artwork or collections.</small></p>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Apply</th>
+          <th>Status</th>
+          <th>Plex</th>
+          <th>Jellyfin</th>
+          <th>Canonical path</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td>
+            {% if row.match_status == 'matched' and row.plex_rating_key and row.jellyfin_item_id %}
+              <input type="checkbox" name="sync_item_id" value="{{ row.id }}">
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          <td>
+            {% if row.match_status == 'matched' and not row.match_warning %}
+              <span class="ok">matched</span>
+            {% elif row.match_status == 'matched' and row.match_warning %}
+              <span class="warn">warning</span><br><small>{{ row.match_warning }}</small>
+            {% else %}
+              <span class="bad">{{ row.match_status }}</span>
+            {% endif %}
+            {% if row.identity_sync_status %}
+              <br><small>identity: {{ row.identity_sync_status }}</small>
+            {% endif %}
+            {% if row.identity_sync_error %}
+              <br><small class="bad">{{ row.identity_sync_error }}</small>
+            {% endif %}
+          </td>
+          <td>
+            {{ row.plex_title or '—' }}{% if row.plex_year %} ({{ row.plex_year }}){% endif %}<br>
+            <small>{{ row.plex_path or '' }}</small>
+          </td>
+          <td>
+            {{ row.jellyfin_title or '—' }}{% if row.jellyfin_year %} ({{ row.jellyfin_year }}){% endif %}<br>
+            <small>{{ row.jellyfin_path or '' }}</small>
+          </td>
+          <td><small>{{ row.canonical_path }}</small></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5">No preview results yet. Run a preview scan.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </form>
 
   <div class="pagination">
     {% if page > 1 %}
@@ -116,4 +140,20 @@
     {% endif %}
   </div>
 </section>
+
+<script>
+  document.querySelectorAll('.loading-form').forEach((form) => {
+    form.addEventListener('submit', () => {
+      const button = form.querySelector('button[type="submit"]');
+      const indicator = form.querySelector('.loading-indicator');
+      if (button) {
+        button.disabled = true;
+        button.textContent = button.dataset.loadingText || 'Working…';
+      }
+      if (indicator) {
+        indicator.hidden = false;
+      }
+    });
+  });
+</script>
 {% endblock %}

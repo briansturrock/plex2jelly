@@ -100,11 +100,55 @@ class PlexClient:
             })
         return items
 
+    def item_metadata(self, rating_key: str) -> dict[str, object]:
+        data = self.get_json_or_xml(f"/library/metadata/{rating_key}")
+        if isinstance(data, ET.Element):
+            video = data.find("Video")
+            if video is None:
+                return {}
+            return {
+                "title": video.attrib.get("title", ""),
+                "sort_title": video.attrib.get("titleSort") or video.attrib.get("title", ""),
+                "original_title": video.attrib.get("originalTitle", ""),
+                "summary": video.attrib.get("summary", ""),
+                "tagline": video.attrib.get("tagline", ""),
+                "year": _int_or_none(video.attrib.get("year")),
+                "originally_available_at": video.attrib.get("originallyAvailableAt", ""),
+                "content_rating": video.attrib.get("contentRating", ""),
+                "audience_rating": _float_or_none(video.attrib.get("audienceRating")),
+            }
+
+        container = data.get("MediaContainer", data)
+        metadata = container.get("Metadata") or []
+        if not metadata:
+            return {}
+        item = metadata[0]
+        return {
+            "title": item.get("title", ""),
+            "sort_title": item.get("titleSort") or item.get("title", ""),
+            "original_title": item.get("originalTitle", ""),
+            "summary": item.get("summary", ""),
+            "tagline": item.get("tagline", ""),
+            "year": _int_or_none(item.get("year")),
+            "originally_available_at": item.get("originallyAvailableAt", ""),
+            "content_rating": item.get("contentRating", ""),
+            "audience_rating": _float_or_none(item.get("audienceRating")),
+        }
+
 
 def _int_or_none(value: object) -> int | None:
     try:
         if value is None or value == "":
             return None
         return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _float_or_none(value: object) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
     except (TypeError, ValueError):
         return None

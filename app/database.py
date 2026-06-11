@@ -65,10 +65,22 @@ CREATE TABLE IF NOT EXISTS sync_items (
     tmdb_lookup_status TEXT NOT NULL DEFAULT 'not_attempted',
     metadata_hash TEXT,
     artwork_hash TEXT,
+    identity_synced_at TEXT,
+    identity_sync_status TEXT,
+    identity_sync_error TEXT,
     match_status TEXT NOT NULL DEFAULT 'unknown',
     last_seen_at TEXT,
     last_synced_at TEXT,
     UNIQUE(library_mapping_id, canonical_path)
+);
+
+CREATE TABLE IF NOT EXISTS sync_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sync_item_id INTEGER,
+    operation TEXT NOT NULL,
+    status TEXT NOT NULL,
+    details TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 """
 
@@ -105,6 +117,9 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         ("jellyfin_year", "ALTER TABLE sync_items ADD COLUMN jellyfin_year INTEGER"),
         ("jellyfin_duration_ms", "ALTER TABLE sync_items ADD COLUMN jellyfin_duration_ms INTEGER"),
         ("match_warning", "ALTER TABLE sync_items ADD COLUMN match_warning TEXT"),
+        ("identity_synced_at", "ALTER TABLE sync_items ADD COLUMN identity_synced_at TEXT"),
+        ("identity_sync_status", "ALTER TABLE sync_items ADD COLUMN identity_sync_status TEXT"),
+        ("identity_sync_error", "ALTER TABLE sync_items ADD COLUMN identity_sync_error TEXT"),
     ]:
         if not _column_exists(conn, "sync_items", column):
             conn.execute(ddl)

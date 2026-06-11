@@ -12,8 +12,8 @@ from app.database import (
     set_setting,
 )
 from app.jellyfin_client import JellyfinClient
-from app.plex_client import PlexClient
 from app.matcher import canonicalise_path, warning_reasons
+from app.plex_client import PlexClient
 
 
 def create_app() -> Flask:
@@ -203,8 +203,9 @@ def create_app() -> Flask:
     def delete_library(mapping_id: int):
         with connect() as conn:
             conn.execute("DELETE FROM path_mappings WHERE library_mapping_id = ?", (mapping_id,))
+            conn.execute("DELETE FROM sync_items WHERE library_mapping_id = ?", (mapping_id,))
             conn.execute("DELETE FROM library_mappings WHERE id = ?", (mapping_id,))
-        flash("Library mapping and linked path mappings deleted.", "success")
+        flash("Library mapping, linked path mappings and preview rows deleted.", "success")
         return redirect(url_for("libraries"))
 
     @app.post("/libraries/<int:mapping_id>/toggle")
@@ -216,7 +217,6 @@ def create_app() -> Flask:
             )
         flash("Library mapping updated.", "success")
         return redirect(url_for("libraries"))
-
 
     @app.route("/match", methods=["GET", "POST"])
     def match_preview():
@@ -235,7 +235,7 @@ def create_app() -> Flask:
                 )
             except Exception as exc:
                 flash(f"Match preview failed: {exc}", "error")
-            return redirect(url_for("match_preview", library_mapping_id=mapping_id))
+            return redirect(url_for("match_preview", library_mapping_id=mapping_id, filter="issues"))
 
         selected_mapping_id = request.args.get("library_mapping_id", "").strip()
         status_filter = request.args.get("filter", "all").strip() or "all"
@@ -309,8 +309,40 @@ def create_app() -> Flask:
             rows=rows,
         )
 
-    return app
+    @app.post("/identity/apply")
+    def apply_identity():
+        cfg = AppConfig.load()
+        selected_ids = [int(value) for value in request.form.getlist("sync_item_id") if value.isdigit()]
+        return_mapping_id = request.form.get("library_mapping_id", "").strip()
+        if not selected_ids:
+            flash("Select at least one matched item to overwrite.", "error")
+            return redirect(url_for("match_preview", library_mapping_id=return_mapping_id, filter="issues"))
+        if not cfg.has_plex or not cfg.has_jellyfin:
+            flash("Plex and Jellyfin must be configured first.", "error")
+            return redirect(url_for("match_preview", library_mapping_id=return_mapping_id, filter="issues"))
 
+        plex = PlexClient(cfg.plex_base_url, cfg.plex_token, timeout=15)
+        jellyfin = JellyfinClient(cfg.jellyfin_base_url, cfg.jellyfin_api_key, timeout=15)
+        applied = 0
+        failed = 0
+        skipped = 0
+
+        for sync_item_id in selected_ids:
+            try:
+                result = _apply_identity_overwrite(sync_item_id, plex, jellyfin)
+                if result == "applied":
+                    applied += 1
+                elif result == "skipped":
+                    skipped += 1
+            except Exception as exc:
+                failed += 1
+                _record_identity_failure(sync_item_id, str(exc))
+
+        category = "success" if failed == 0 else "error"
+        flash(f"Identity overwrite complete: {applied} applied, {skipped} skipped, {failed} failed.", category)
+        return redirect(url_for("match_preview", library_mapping_id=return_mapping_id, filter="issues"))
+
+    return app
 
 
 def _safe_int(value: object, default: int, minimum: int, maximum: int) -> int:
@@ -420,3 +452,83 @@ def _run_match_preview(library_mapping_id: int, cfg: AppConfig) -> dict[str, int
         "unmatched_jellyfin": sum(1 for r in results if r["status"] == "unmatched_jellyfin"),
         "path_failure": sum(1 for r in results if r["status"] == "path_failure"),
     }
+
+
+def _apply_identity_overwrite(sync_item_id: int, plex: PlexClient, jellyfin: JellyfinClient) -> str:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM sync_items WHERE id = ?", (sync_item_id,)).fetchone()
+
+    if not row or row["match_status"] != "matched" or not row["plex_rating_key"] or not row["jellyfin_item_id"]:
+        _record_identity_audit(sync_item_id, "skipped", "Item is not a path-matched Plex/Jellyfin pair.")
+        return "skipped"
+
+    plex_meta = plex.item_metadata(row["plex_rating_key"])
+    if not plex_meta.get("title"):
+        raise RuntimeError("Plex metadata did not include a title.")
+
+    jf_item = jellyfin.get_item(row["jellyfin_item_id"])
+    patched = dict(jf_item)
+    patched["Name"] = plex_meta.get("title") or patched.get("Name")
+    patched["OriginalTitle"] = plex_meta.get("original_title") or plex_meta.get("title") or patched.get("OriginalTitle")
+    patched["SortName"] = plex_meta.get("sort_title") or plex_meta.get("title") or patched.get("SortName")
+    patched["Overview"] = plex_meta.get("summary") or patched.get("Overview")
+    patched["Tagline"] = plex_meta.get("tagline") or patched.get("Tagline")
+    if plex_meta.get("year") is not None:
+        patched["ProductionYear"] = plex_meta.get("year")
+    if plex_meta.get("originally_available_at"):
+        patched["PremiereDate"] = f"{plex_meta['originally_available_at']}T00:00:00.0000000Z"
+    if plex_meta.get("content_rating"):
+        patched["OfficialRating"] = plex_meta.get("content_rating")
+    if plex_meta.get("audience_rating") is not None:
+        patched["CommunityRating"] = plex_meta.get("audience_rating")
+
+    jellyfin.update_item(row["jellyfin_item_id"], patched)
+
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE sync_items
+            SET jellyfin_title = ?, jellyfin_year = ?, match_warning = '',
+                identity_synced_at = CURRENT_TIMESTAMP, identity_sync_status = 'applied', identity_sync_error = ''
+            WHERE id = ?
+            """,
+            (plex_meta.get("title"), plex_meta.get("year"), sync_item_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO sync_audit(sync_item_id, operation, status, details)
+            VALUES (?, 'identity_overwrite', 'applied', ?)
+            """,
+            (sync_item_id, f"Applied Plex identity: {plex_meta.get('title')} ({plex_meta.get('year') or ''})"),
+        )
+    return "applied"
+
+
+def _record_identity_failure(sync_item_id: int, error: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE sync_items
+            SET identity_sync_status = 'failed', identity_sync_error = ?
+            WHERE id = ?
+            """,
+            (error, sync_item_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO sync_audit(sync_item_id, operation, status, details)
+            VALUES (?, 'identity_overwrite', 'failed', ?)
+            """,
+            (sync_item_id, error),
+        )
+
+
+def _record_identity_audit(sync_item_id: int, status: str, details: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO sync_audit(sync_item_id, operation, status, details)
+            VALUES (?, 'identity_overwrite', ?, ?)
+            """,
+            (sync_item_id, status, details),
+        )

@@ -66,6 +66,16 @@ class JellyfinClient:
             })
         return items
 
+    def get_item(self, item_id: str) -> dict[str, object]:
+        response = requests.get(self._url(f"/Items/{item_id}"), headers=self.headers, timeout=self.timeout)
+        response.raise_for_status()
+        return response.json()
+
+    def update_item(self, item_id: str, item: dict[str, object]) -> None:
+        headers = {**self.headers, "Content-Type": "application/json"}
+        response = requests.post(self._url(f"/Items/{item_id}"), headers=headers, json=item, timeout=self.timeout)
+        response.raise_for_status()
+
 
 def _int_or_none(value: object) -> int | None:
     try:
