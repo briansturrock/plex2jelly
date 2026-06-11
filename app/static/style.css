@@ -127,3 +127,28 @@ small {
   gap: 0.5rem;
   flex-wrap: wrap;
 }
+.stats {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin: 1rem 0;
+}
+.stats span {
+  background: #f1f3f4;
+  padding: 0.4rem 0.6rem;
+  border-radius: 4px;
+}
+.warn {
+  color: #b06000;
+  font-weight: bold;
+}
+.pagination {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  margin: 1rem 0;
+}
+.pagination a {
+  color: #202124;
+  font-weight: bold;
+}

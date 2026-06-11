@@ -40,3 +40,37 @@ class JellyfinClient:
             collection_type = item.get("CollectionType") or item.get("LibraryOptions", {}).get("TypeOptions", [{}])[0].get("Type", "")
             libraries.append({"id": str(item_id), "name": name, "type": collection_type or "unknown"})
         return libraries
+
+    def library_items(self, library_id: str, media_type: str = "movie") -> list[dict[str, object]]:
+        include_types = "Movie" if media_type == "movie" else "Movie,Series,Episode"
+        params = {
+            "ParentId": library_id,
+            "Recursive": "true",
+            "IncludeItemTypes": include_types,
+            "Fields": "Path,ProductionYear,RunTimeTicks",
+        }
+        response = requests.get(self._url("/Items"), headers=self.headers, params=params, timeout=self.timeout)
+        response.raise_for_status()
+        data = response.json()
+        items: list[dict[str, object]] = []
+        for item in data.get("Items", []):
+            ticks = item.get("RunTimeTicks")
+            duration_ms = int(ticks / 10000) if isinstance(ticks, int) else None
+            items.append({
+                "item_id": item.get("Id", ""),
+                "title": item.get("Name", ""),
+                "year": _int_or_none(item.get("ProductionYear")),
+                "duration_ms": duration_ms,
+                "path": item.get("Path", "") or "",
+                "media_type": item.get("Type", ""),
+            })
+        return items
+
+
+def _int_or_none(value: object) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None

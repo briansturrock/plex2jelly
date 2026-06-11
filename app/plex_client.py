@@ -45,8 +45,7 @@ class PlexClient:
         data = self.get_json_or_xml("/library/sections")
         libraries: list[dict[str, str]] = []
         if isinstance(data, ET.Element):
-            dirs = data.findall("Directory")
-            for item in dirs:
+            for item in data.findall("Directory"):
                 libraries.append({
                     "key": item.attrib.get("key", ""),
                     "title": item.attrib.get("title", ""),
@@ -61,3 +60,51 @@ class PlexClient:
                     "type": item.get("type", ""),
                 })
         return libraries
+
+    def library_items(self, library_key: str) -> list[dict[str, object]]:
+        data = self.get_json_or_xml(f"/library/sections/{library_key}/all")
+        container = data.get("MediaContainer", data) if not isinstance(data, ET.Element) else None
+        items: list[dict[str, object]] = []
+
+        if isinstance(data, ET.Element):
+            videos = data.findall("Video")
+            for video in videos:
+                part = video.find("./Media/Part")
+                file_path = part.attrib.get("file", "") if part is not None else ""
+                items.append({
+                    "rating_key": video.attrib.get("ratingKey", ""),
+                    "guid": video.attrib.get("guid", ""),
+                    "title": video.attrib.get("title", ""),
+                    "year": _int_or_none(video.attrib.get("year")),
+                    "duration_ms": _int_or_none(video.attrib.get("duration")),
+                    "path": file_path,
+                    "media_type": video.attrib.get("type", "movie"),
+                })
+            return items
+
+        for video in container.get("Metadata", []):
+            file_path = ""
+            media = video.get("Media") or []
+            if media:
+                parts = media[0].get("Part") or []
+                if parts:
+                    file_path = parts[0].get("file", "") or ""
+            items.append({
+                "rating_key": str(video.get("ratingKey", "")),
+                "guid": video.get("guid", ""),
+                "title": video.get("title", ""),
+                "year": _int_or_none(video.get("year")),
+                "duration_ms": _int_or_none(video.get("duration")),
+                "path": file_path,
+                "media_type": video.get("type", "movie"),
+            })
+        return items
+
+
+def _int_or_none(value: object) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None

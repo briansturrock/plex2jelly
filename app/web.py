@@ -13,6 +13,7 @@ from app.database import (
 )
 from app.jellyfin_client import JellyfinClient
 from app.plex_client import PlexClient
+from app.matcher import canonicalise_path, warning_reasons
 
 
 def create_app() -> Flask:
@@ -216,4 +217,206 @@ def create_app() -> Flask:
         flash("Library mapping updated.", "success")
         return redirect(url_for("libraries"))
 
+
+    @app.route("/match", methods=["GET", "POST"])
+    def match_preview():
+        cfg = AppConfig.load()
+        if request.method == "POST":
+            mapping_id = request.form.get("library_mapping_id", "").strip()
+            if not mapping_id:
+                flash("Select a library mapping first.", "error")
+                return redirect(url_for("match_preview"))
+            try:
+                result = _run_match_preview(int(mapping_id), cfg)
+                flash(
+                    f"Scan complete: {result['matched']} matched, {result['warnings']} warnings, "
+                    f"{result['unmatched_plex']} unmatched Plex, {result['unmatched_jellyfin']} unmatched Jellyfin.",
+                    "success",
+                )
+            except Exception as exc:
+                flash(f"Match preview failed: {exc}", "error")
+            return redirect(url_for("match_preview", library_mapping_id=mapping_id))
+
+        selected_mapping_id = request.args.get("library_mapping_id", "").strip()
+        status_filter = request.args.get("filter", "all").strip() or "all"
+        page_size = _safe_int(request.args.get("page_size"), 50, minimum=10, maximum=500)
+        page = _safe_int(request.args.get("page"), 1, minimum=1, maximum=999999)
+        offset = (page - 1) * page_size
+
+        with connect() as conn:
+            mappings = conn.execute(
+                """
+                SELECT id, name, plex_library_name, jellyfin_library_name, media_type, enabled
+                FROM library_mappings
+                ORDER BY name COLLATE NOCASE
+                """
+            ).fetchall()
+
+            params: list[object] = []
+            where = []
+            if selected_mapping_id:
+                where.append("library_mapping_id = ?")
+                params.append(int(selected_mapping_id))
+            if status_filter == "issues":
+                where.append("match_status != 'matched' OR COALESCE(match_warning, '') != ''")
+            elif status_filter in {"matched", "warnings", "unmatched_plex", "unmatched_jellyfin", "path_failure"}:
+                if status_filter == "warnings":
+                    where.append("COALESCE(match_warning, '') != ''")
+                else:
+                    where.append("match_status = ?")
+                    params.append(status_filter)
+            where_sql = " WHERE " + " AND ".join(f"({w})" for w in where) if where else ""
+
+            stats = conn.execute(
+                f"""
+                SELECT
+                  COUNT(*) AS total,
+                  SUM(CASE WHEN match_status = 'matched' THEN 1 ELSE 0 END) AS matched,
+                  SUM(CASE WHEN COALESCE(match_warning, '') != '' THEN 1 ELSE 0 END) AS warnings,
+                  SUM(CASE WHEN match_status = 'unmatched_plex' THEN 1 ELSE 0 END) AS unmatched_plex,
+                  SUM(CASE WHEN match_status = 'unmatched_jellyfin' THEN 1 ELSE 0 END) AS unmatched_jellyfin,
+                  SUM(CASE WHEN match_status = 'path_failure' THEN 1 ELSE 0 END) AS path_failure
+                FROM sync_items{where_sql}
+                """,
+                params,
+            ).fetchone()
+            total = stats["total"] or 0
+            rows = conn.execute(
+                f"""
+                SELECT si.*, lm.name AS library_name
+                FROM sync_items si
+                JOIN library_mappings lm ON lm.id = si.library_mapping_id
+                {where_sql}
+                ORDER BY
+                  CASE WHEN match_status = 'matched' AND COALESCE(match_warning, '') = '' THEN 1 ELSE 0 END,
+                  COALESCE(plex_title, jellyfin_title, canonical_path) COLLATE NOCASE
+                LIMIT ? OFFSET ?
+                """,
+                [*params, page_size, offset],
+            ).fetchall()
+
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        return render_template(
+            "match.html",
+            cfg=cfg,
+            mappings=mappings,
+            selected_mapping_id=selected_mapping_id,
+            status_filter=status_filter,
+            page_size=page_size,
+            page=page,
+            total_pages=total_pages,
+            stats=stats,
+            rows=rows,
+        )
+
     return app
+
+
+
+def _safe_int(value: object, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def _run_match_preview(library_mapping_id: int, cfg: AppConfig) -> dict[str, int]:
+    if not cfg.has_plex or not cfg.has_jellyfin:
+        raise RuntimeError("Plex and Jellyfin must be configured first.")
+
+    with connect() as conn:
+        mapping = conn.execute("SELECT * FROM library_mappings WHERE id = ?", (library_mapping_id,)).fetchone()
+        if not mapping:
+            raise RuntimeError("Library mapping not found.")
+        path_rows = conn.execute(
+            "SELECT plex_path, jellyfin_path FROM path_mappings WHERE library_mapping_id = ? AND enabled = 1",
+            (library_mapping_id,),
+        ).fetchall()
+    if not path_rows:
+        raise RuntimeError("Add a path mapping for this library first.")
+
+    path_mappings = [dict(row) for row in path_rows]
+    plex_items = PlexClient(cfg.plex_base_url, cfg.plex_token, timeout=30).library_items(mapping["plex_library_key"])
+    jellyfin_items = JellyfinClient(cfg.jellyfin_base_url, cfg.jellyfin_api_key, timeout=30).library_items(
+        mapping["jellyfin_library_id"], mapping["media_type"]
+    )
+
+    plex_by_path: dict[str, dict[str, object]] = {}
+    jellyfin_by_path: dict[str, dict[str, object]] = {}
+    results: list[dict[str, object]] = []
+
+    for item in plex_items:
+        canonical = canonicalise_path(str(item.get("path") or ""), path_mappings, "plex")
+        if not item.get("path") or canonical == item.get("path"):
+            results.append({"status": "path_failure", "canonical": canonical, "plex": item, "jellyfin": None, "warning": "plex path not mapped"})
+        else:
+            plex_by_path[canonical] = item
+
+    for item in jellyfin_items:
+        canonical = canonicalise_path(str(item.get("path") or ""), path_mappings, "jellyfin")
+        if not item.get("path") or canonical == item.get("path"):
+            results.append({"status": "path_failure", "canonical": canonical, "plex": None, "jellyfin": item, "warning": "jellyfin path not mapped"})
+        else:
+            jellyfin_by_path[canonical] = item
+
+    for canonical, plex_item in plex_by_path.items():
+        jellyfin_item = jellyfin_by_path.get(canonical)
+        if not jellyfin_item:
+            results.append({"status": "unmatched_plex", "canonical": canonical, "plex": plex_item, "jellyfin": None, "warning": ""})
+            continue
+        row_for_warning = {
+            "plex_title": plex_item.get("title"),
+            "jellyfin_title": jellyfin_item.get("title"),
+            "plex_year": plex_item.get("year"),
+            "jellyfin_year": jellyfin_item.get("year"),
+            "plex_duration_ms": plex_item.get("duration_ms"),
+            "jellyfin_duration_ms": jellyfin_item.get("duration_ms"),
+        }
+        warning = ", ".join(warning_reasons(row_for_warning))
+        results.append({"status": "matched", "canonical": canonical, "plex": plex_item, "jellyfin": jellyfin_item, "warning": warning})
+
+    for canonical, jellyfin_item in jellyfin_by_path.items():
+        if canonical not in plex_by_path:
+            results.append({"status": "unmatched_jellyfin", "canonical": canonical, "plex": None, "jellyfin": jellyfin_item, "warning": ""})
+
+    with connect() as conn:
+        conn.execute("DELETE FROM sync_items WHERE library_mapping_id = ?", (library_mapping_id,))
+        for result in results:
+            plex_item = result.get("plex") or {}
+            jellyfin_item = result.get("jellyfin") or {}
+            conn.execute(
+                """
+                INSERT INTO sync_items(
+                    library_mapping_id, plex_rating_key, plex_guid, jellyfin_item_id, media_type,
+                    canonical_path, plex_path, jellyfin_path, plex_title, plex_year, plex_duration_ms,
+                    jellyfin_title, jellyfin_year, jellyfin_duration_ms, match_status, match_warning, last_seen_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (
+                    library_mapping_id,
+                    plex_item.get("rating_key"),
+                    plex_item.get("guid"),
+                    jellyfin_item.get("item_id"),
+                    mapping["media_type"],
+                    result.get("canonical"),
+                    plex_item.get("path"),
+                    jellyfin_item.get("path"),
+                    plex_item.get("title"),
+                    plex_item.get("year"),
+                    plex_item.get("duration_ms"),
+                    jellyfin_item.get("title"),
+                    jellyfin_item.get("year"),
+                    jellyfin_item.get("duration_ms"),
+                    result.get("status"),
+                    result.get("warning") or "",
+                ),
+            )
+
+    return {
+        "matched": sum(1 for r in results if r["status"] == "matched"),
+        "warnings": sum(1 for r in results if r.get("warning")),
+        "unmatched_plex": sum(1 for r in results if r["status"] == "unmatched_plex"),
+        "unmatched_jellyfin": sum(1 for r in results if r["status"] == "unmatched_jellyfin"),
+        "path_failure": sum(1 for r in results if r["status"] == "path_failure"),
+    }

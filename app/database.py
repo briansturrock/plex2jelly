@@ -56,6 +56,10 @@ CREATE TABLE IF NOT EXISTS sync_items (
     plex_title TEXT,
     plex_year INTEGER,
     plex_duration_ms INTEGER,
+    jellyfin_title TEXT,
+    jellyfin_year INTEGER,
+    jellyfin_duration_ms INTEGER,
+    match_warning TEXT,
     tmdb_id TEXT,
     imdb_id TEXT,
     tmdb_lookup_status TEXT NOT NULL DEFAULT 'not_attempted',
@@ -96,6 +100,14 @@ def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
 def _run_migrations(conn: sqlite3.Connection) -> None:
     if not _column_exists(conn, "path_mappings", "library_mapping_id"):
         conn.execute("ALTER TABLE path_mappings ADD COLUMN library_mapping_id INTEGER")
+    for column, ddl in [
+        ("jellyfin_title", "ALTER TABLE sync_items ADD COLUMN jellyfin_title TEXT"),
+        ("jellyfin_year", "ALTER TABLE sync_items ADD COLUMN jellyfin_year INTEGER"),
+        ("jellyfin_duration_ms", "ALTER TABLE sync_items ADD COLUMN jellyfin_duration_ms INTEGER"),
+        ("match_warning", "ALTER TABLE sync_items ADD COLUMN match_warning TEXT"),
+    ]:
+        if not _column_exists(conn, "sync_items", column):
+            conn.execute(ddl)
 
 
 def init_db() -> None:

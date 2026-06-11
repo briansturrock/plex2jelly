@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Match preview</h2>
+  <p>Read-only preview. This matches Plex and Jellyfin items by scoped path mapping and stores the preview locally.</p>
+  {% if not mappings %}
+    <p>Add a library mapping first.</p>
+  {% else %}
+    <form method="post" class="inline-form">
+      <label>Library mapping
+        <select name="library_mapping_id">
+          {% for mapping in mappings %}
+          <option value="{{ mapping.id }}" {% if selected_mapping_id|string == mapping.id|string %}selected{% endif %}>{{ mapping.name }}: {{ mapping.plex_library_name }} → {{ mapping.jellyfin_library_name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <button type="submit">Run preview scan</button>
+    </form>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Results</h2>
+  <form method="get" class="inline-form">
+    <label>Library
+      <select name="library_mapping_id">
+        <option value="">All</option>
+        {% for mapping in mappings %}
+        <option value="{{ mapping.id }}" {% if selected_mapping_id|string == mapping.id|string %}selected{% endif %}>{{ mapping.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Show
+      <select name="filter">
+        <option value="all" {% if status_filter == 'all' %}selected{% endif %}>All</option>
+        <option value="issues" {% if status_filter == 'issues' %}selected{% endif %}>Warnings and unmatched only</option>
+        <option value="warnings" {% if status_filter == 'warnings' %}selected{% endif %}>Warnings only</option>
+        <option value="unmatched_plex" {% if status_filter == 'unmatched_plex' %}selected{% endif %}>Unmatched Plex only</option>
+        <option value="unmatched_jellyfin" {% if status_filter == 'unmatched_jellyfin' %}selected{% endif %}>Unmatched Jellyfin only</option>
+        <option value="matched" {% if status_filter == 'matched' %}selected{% endif %}>Matched only</option>
+      </select>
+    </label>
+    <label>Page size
+      <select name="page_size">
+        {% for size in [25, 50, 100, 250, 500] %}
+        <option value="{{ size }}" {% if page_size == size %}selected{% endif %}>{{ size }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">Apply filter</button>
+  </form>
+
+  <div class="stats">
+    <span>Total: {{ stats.total or 0 }}</span>
+    <span>Matched: {{ stats.matched or 0 }}</span>
+    <span>Warnings: {{ stats.warnings or 0 }}</span>
+    <span>Unmatched Plex: {{ stats.unmatched_plex or 0 }}</span>
+    <span>Unmatched Jellyfin: {{ stats.unmatched_jellyfin or 0 }}</span>
+    <span>Path failures: {{ stats.path_failure or 0 }}</span>
+  </div>
+
+  <div class="pagination">
+    {% if page > 1 %}
+      <a href="{{ url_for('match_preview', library_mapping_id=selected_mapping_id, filter=status_filter, page_size=page_size, page=page-1) }}">Previous</a>
+    {% endif %}
+    <span>Page {{ page }} of {{ total_pages }}</span>
+    {% if page < total_pages %}
+      <a href="{{ url_for('match_preview', library_mapping_id=selected_mapping_id, filter=status_filter, page_size=page_size, page=page+1) }}">Next</a>
+    {% endif %}
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Status</th>
+        <th>Plex</th>
+        <th>Jellyfin</th>
+        <th>Canonical path</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>
+          {% if row.match_status == 'matched' and not row.match_warning %}
+            <span class="ok">matched</span>
+          {% elif row.match_status == 'matched' and row.match_warning %}
+            <span class="warn">warning</span><br><small>{{ row.match_warning }}</small>
+          {% else %}
+            <span class="bad">{{ row.match_status }}</span>
+          {% endif %}
+        </td>
+        <td>
+          {{ row.plex_title or '—' }}{% if row.plex_year %} ({{ row.plex_year }}){% endif %}<br>
+          <small>{{ row.plex_path or '' }}</small>
+        </td>
+        <td>
+          {{ row.jellyfin_title or '—' }}{% if row.jellyfin_year %} ({{ row.jellyfin_year }}){% endif %}<br>
+          <small>{{ row.jellyfin_path or '' }}</small>
+        </td>
+        <td><small>{{ row.canonical_path }}</small></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4">No preview results yet. Run a preview scan.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="pagination">
+    {% if page > 1 %}
+      <a href="{{ url_for('match_preview', library_mapping_id=selected_mapping_id, filter=status_filter, page_size=page_size, page=page-1) }}">Previous</a>
+    {% endif %}
+    <span>Page {{ page }} of {{ total_pages }}</span>
+    {% if page < total_pages %}
+      <a href="{{ url_for('match_preview', library_mapping_id=selected_mapping_id, filter=status_filter, page_size=page_size, page=page+1) }}">Next</a>
+    {% endif %}
+  </div>
+</section>
+{% endblock %}
