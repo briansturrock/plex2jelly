@@ -174,3 +174,10 @@ button:disabled {
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* 0.3.1: ensure loading indicators are hidden until their form is submitted.
+   The global .loading-indicator display:flex rule overrides the HTML hidden
+   attribute in some browsers unless this explicit selector is present. */
+.loading-indicator[hidden] {
+  display: none !important;
+}
