@@ -16,7 +16,7 @@ from app.jellyfin_client import JellyfinClient
 from app.matcher import canonicalise_path, warning_reasons
 from app.plex_client import PlexClient
 
-METADATA_SCOPE_VERSION = "movie_core_v1"
+METADATA_SCOPE_VERSION = "movie_core_v2"
 METADATA_FIELDS = [
     "Name",
     "OriginalTitle",
@@ -517,38 +517,52 @@ def _apply_metadata_overwrite(sync_item_id: int, plex: PlexClient, jellyfin: Jel
     if not plex_meta.get("title"):
         raise RuntimeError("Plex metadata did not include a title.")
 
-    payload = _build_metadata_payload(row["jellyfin_item_id"], plex_meta)
-    jellyfin.update_item(row["jellyfin_item_id"], payload)
+    result = _apply_metadata_resilient(row["jellyfin_item_id"], plex_meta, jellyfin)
+    metadata_fields = json.dumps(result["applied_fields"], sort_keys=True)
+    status = "applied" if not result["errors"] else "partial"
+    error_text = "; ".join(result["errors"])
 
-    metadata_fields = json.dumps(list(payload.keys()), sort_keys=True)
     with connect() as conn:
         conn.execute(
             """
             UPDATE sync_items
             SET jellyfin_title = ?,
                 jellyfin_year = ?,
-                match_warning = '',
+                match_warning = CASE WHEN ? = 'applied' THEN '' ELSE match_warning END,
                 metadata_synced_at = CURRENT_TIMESTAMP,
-                metadata_sync_status = 'applied',
-                metadata_sync_error = '',
+                metadata_sync_status = ?,
+                metadata_sync_error = ?,
                 metadata_scope_version = ?,
                 metadata_fields = ?,
                 identity_synced_at = CURRENT_TIMESTAMP,
-                identity_sync_status = 'applied',
-                identity_sync_error = '',
+                identity_sync_status = ?,
+                identity_sync_error = ?,
                 last_synced_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
-            (plex_meta.get("title"), plex_meta.get("year"), METADATA_SCOPE_VERSION, metadata_fields, sync_item_id),
+            (
+                plex_meta.get("title"),
+                plex_meta.get("year"),
+                status,
+                status,
+                error_text,
+                METADATA_SCOPE_VERSION,
+                metadata_fields,
+                status,
+                error_text,
+                sync_item_id,
+            ),
         )
         conn.execute(
             """
             INSERT INTO sync_audit(sync_item_id, operation, status, details)
-            VALUES (?, 'metadata_overwrite', 'applied', ?)
+            VALUES (?, 'metadata_overwrite', ?, ?)
             """,
             (
                 sync_item_id,
-                f"Applied {METADATA_SCOPE_VERSION}: {plex_meta.get('title')} ({plex_meta.get('year') or ''}); fields={metadata_fields}",
+                status,
+                f"Applied {METADATA_SCOPE_VERSION}: {plex_meta.get('title')} ({plex_meta.get('year') or ''}); "
+                f"fields={metadata_fields}; errors={error_text}",
             ),
         )
     return "applied"
@@ -563,7 +577,7 @@ def _build_metadata_payload(jellyfin_item_id: str, plex_meta: dict[str, object])
     }
     if plex_meta.get("year") is not None:
         payload["ProductionYear"] = plex_meta.get("year")
-    if plex_meta.get("originally_available_at"):
+    if _valid_plex_date(plex_meta.get("originally_available_at")):
         payload["PremiereDate"] = f"{plex_meta['originally_available_at']}T00:00:00.0000000Z"
     if plex_meta.get("summary"):
         payload["Overview"] = plex_meta.get("summary")
@@ -571,9 +585,65 @@ def _build_metadata_payload(jellyfin_item_id: str, plex_meta: dict[str, object])
         payload["Tagline"] = plex_meta.get("tagline")
     if plex_meta.get("content_rating"):
         payload["OfficialRating"] = plex_meta.get("content_rating")
-    if plex_meta.get("audience_rating") is not None:
-        payload["CommunityRating"] = plex_meta.get("audience_rating")
+    rating = _normalise_rating(plex_meta.get("audience_rating"))
+    if rating is not None:
+        payload["CommunityRating"] = rating
     return payload
+
+
+def _apply_metadata_resilient(jellyfin_item_id: str, plex_meta: dict[str, object], jellyfin: JellyfinClient) -> dict[str, list[str]]:
+    """Apply core metadata first, then optional fields one at a time.
+
+    Jellyfin can reject one optional field with HTTP 400. A bad rating/date/tagline should
+    not block the title/year update for the item.
+    """
+    full_payload = _build_metadata_payload(jellyfin_item_id, plex_meta)
+    core_fields = ["Id", "Name", "ProductionYear"]
+    applied_fields: list[str] = []
+    errors: list[str] = []
+
+    core_payload = {key: full_payload[key] for key in core_fields if key in full_payload}
+    if "Id" not in core_payload or "Name" not in core_payload:
+        raise RuntimeError("Core metadata payload is missing Id or Name.")
+
+    jellyfin.update_item(jellyfin_item_id, core_payload)
+    applied_fields.extend(core_payload.keys())
+
+    for field in ["OriginalTitle", "ForcedSortName", "PremiereDate", "Overview", "Tagline", "OfficialRating", "CommunityRating"]:
+        if field not in full_payload:
+            continue
+        field_payload = dict(core_payload)
+        field_payload[field] = full_payload[field]
+        try:
+            jellyfin.update_item(jellyfin_item_id, field_payload)
+            applied_fields.append(field)
+        except Exception as exc:
+            current_app.logger.exception("Metadata field failed for item=%s field=%s", jellyfin_item_id, field)
+            errors.append(f"{field}: {exc}")
+
+    # Preserve order but remove duplicates where core fields are reused in optional payloads.
+    applied_fields = list(dict.fromkeys(applied_fields))
+    return {"applied_fields": applied_fields, "errors": errors}
+
+
+def _normalise_rating(value: object) -> float | None:
+    try:
+        rating = float(value)
+    except (TypeError, ValueError):
+        return None
+    if 0 <= rating <= 10:
+        return rating
+    return None
+
+
+def _valid_plex_date(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    parts = value.split("-")
+    if len(parts) != 3:
+        return False
+    year, month, day = parts
+    return len(year) == 4 and len(month) == 2 and len(day) == 2 and all(part.isdigit() for part in parts)
 
 
 def _record_metadata_failure(sync_item_id: int, error: str) -> None:
