@@ -106,6 +106,7 @@ class PlexClient:
             video = data.find("Video")
             if video is None:
                 return {}
+            ratings = _xml_child_dicts(video, "Rating")
             return {
                 "title": video.attrib.get("title", ""),
                 "sort_title": video.attrib.get("titleSort") or video.attrib.get("title", ""),
@@ -116,6 +117,11 @@ class PlexClient:
                 "originally_available_at": video.attrib.get("originallyAvailableAt", ""),
                 "content_rating": video.attrib.get("contentRating", ""),
                 "audience_rating": _float_or_none(video.attrib.get("audienceRating")),
+                "critic_rating": _preferred_critic_rating(ratings),
+                "genres": _xml_tags(video, "Genre"),
+                "countries": _xml_tags(video, "Country"),
+                "studios": _dedupe_strings([video.attrib.get("studio", ""), *_xml_tags(video, "Studio")]),
+                "provider_ids": _provider_ids_from_guids(_xml_guid_ids(video)),
             }
 
         container = data.get("MediaContainer", data)
@@ -123,6 +129,8 @@ class PlexClient:
         if not metadata:
             return {}
         item = metadata[0]
+        ratings = item.get("Rating") or []
+        studio = item.get("studio", "")
         return {
             "title": item.get("title", ""),
             "sort_title": item.get("titleSort") or item.get("title", ""),
@@ -133,7 +141,104 @@ class PlexClient:
             "originally_available_at": item.get("originallyAvailableAt", ""),
             "content_rating": item.get("contentRating", ""),
             "audience_rating": _float_or_none(item.get("audienceRating")),
+            "critic_rating": _preferred_critic_rating(ratings),
+            "genres": _tag_values(item.get("Genre")),
+            "countries": _tag_values(item.get("Country")),
+            "studios": _dedupe_strings([studio, *_tag_values(item.get("Studio"))]),
+            "provider_ids": _provider_ids_from_guids(_guid_values(item.get("Guid"))),
         }
+
+
+def _tag_values(items: object) -> list[str]:
+    if not isinstance(items, list):
+        return []
+    values: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            text = str(item.get("tag") or "").strip()
+            if text and text not in values:
+                values.append(text)
+    return values
+
+
+def _guid_values(items: object) -> list[str]:
+    if not isinstance(items, list):
+        return []
+    values: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            text = str(item.get("id") or "").strip()
+            if text and text not in values:
+                values.append(text)
+    return values
+
+
+def _provider_ids_from_guids(guids: list[str]) -> dict[str, str]:
+    provider_ids: dict[str, str] = {}
+    for guid in guids:
+        if "://" not in guid:
+            continue
+        provider, value = guid.split("://", 1)
+        provider = provider.strip().lower()
+        value = value.strip()
+        if provider in {"imdb", "tmdb", "tvdb"} and value:
+            provider_ids[provider] = value
+    return provider_ids
+
+
+def _preferred_critic_rating(ratings: object) -> float | None:
+    if not isinstance(ratings, list):
+        return None
+
+    def rating_value(item: object) -> float | None:
+        if not isinstance(item, dict):
+            return None
+        if str(item.get("type") or "").lower() != "critic":
+            return None
+        return _float_or_none(item.get("value"))
+
+    # Prefer Rotten Tomatoes critic rating when present, because it maps cleanly to Jellyfin CriticRating.
+    for item in ratings:
+        if isinstance(item, dict) and str(item.get("image") or "").startswith("rottentomatoes://"):
+            value = rating_value(item)
+            if value is not None:
+                return value
+    for item in ratings:
+        value = rating_value(item)
+        if value is not None:
+            return value
+    return None
+
+
+def _xml_tags(parent: ET.Element, child_name: str) -> list[str]:
+    values: list[str] = []
+    for child in parent.findall(child_name):
+        text = child.attrib.get("tag", "").strip()
+        if text and text not in values:
+            values.append(text)
+    return values
+
+
+def _xml_child_dicts(parent: ET.Element, child_name: str) -> list[dict[str, object]]:
+    return [dict(child.attrib) for child in parent.findall(child_name)]
+
+
+def _xml_guid_ids(parent: ET.Element) -> list[str]:
+    values: list[str] = []
+    for child in parent.findall("Guid"):
+        text = child.attrib.get("id", "").strip()
+        if text and text not in values:
+            values.append(text)
+    return values
+
+
+def _dedupe_strings(values: list[object]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
 
 
 def _int_or_none(value: object) -> int | None:

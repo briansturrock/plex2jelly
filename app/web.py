@@ -18,7 +18,7 @@ from app.jellyfin_client import JellyfinClient
 from app.matcher import canonicalise_path, warning_reasons
 from app.plex_client import PlexClient
 
-METADATA_SCOPE_VERSION = "movie_core_v3_web_payload"
+METADATA_SCOPE_VERSION = "movie_core_v4_full_metadata"
 METADATA_FIELDS = [
     "Name",
     "OriginalTitle",
@@ -29,6 +29,11 @@ METADATA_FIELDS = [
     "Taglines",
     "OfficialRating",
     "CommunityRating",
+    "CriticRating",
+    "Genres",
+    "Studios",
+    "ProductionLocations",
+    "ProviderIds",
 ]
 
 
@@ -399,10 +404,10 @@ def _run_match_preview(library_mapping_id: int, cfg: AppConfig) -> dict[str, int
     if not path_rows:
         raise RuntimeError("Add a path mapping for this library first.")
     path_mappings = [dict(row) for row in path_rows]
-    plex_items = PlexClient(cfg.plex_base_url, cfg.plex_token, timeout=30).library_items(mapping["plex_library_key"])
-    jellyfin_items = JellyfinClient(cfg.jellyfin_base_url, cfg.jellyfin_api_key, timeout=30).library_items(
-        mapping["jellyfin_library_id"], mapping["media_type"]
-    )
+    plex_client = PlexClient(cfg.plex_base_url, cfg.plex_token, timeout=30)
+    jellyfin_client = JellyfinClient(cfg.jellyfin_base_url, cfg.jellyfin_api_key, timeout=30)
+    plex_items = plex_client.library_items(mapping["plex_library_key"])
+    jellyfin_items = jellyfin_client.library_items(mapping["jellyfin_library_id"], mapping["media_type"])
     plex_by_path: dict[str, dict[str, object]] = {}
     jellyfin_by_path: dict[str, dict[str, object]] = {}
     results: list[dict[str, object]] = []
@@ -431,7 +436,17 @@ def _run_match_preview(library_mapping_id: int, cfg: AppConfig) -> dict[str, int
             "plex_duration_ms": plex_item.get("duration_ms"),
             "jellyfin_duration_ms": jellyfin_item.get("duration_ms"),
         }
-        warning = ", ".join(warning_reasons(row_for_warning))
+        warning_parts = warning_reasons(row_for_warning)
+        rating_key = str(plex_item.get("rating_key") or "")
+        if rating_key:
+            try:
+                plex_meta = plex_client.item_metadata(rating_key)
+                metadata_warning = _metadata_difference_warning(plex_meta, jellyfin_item)
+                if metadata_warning:
+                    warning_parts.append(metadata_warning)
+            except Exception as exc:
+                warning_parts.append(f"core metadata comparison failed: {exc}")
+        warning = ", ".join(warning_parts)
         results.append({"status": "matched", "canonical": canonical, "plex": plex_item, "jellyfin": jellyfin_item, "warning": warning})
     for canonical, jellyfin_item in jellyfin_by_path.items():
         if canonical not in plex_by_path:
@@ -573,6 +588,107 @@ def _find_current_jellyfin_item_id_by_path(row: Any, jellyfin: JellyfinClient) -
     return None
 
 
+
+def _metadata_difference_warning(plex_meta: dict[str, object], jellyfin_item: dict[str, object]) -> str:
+    differences: list[str] = []
+
+    _diff_text(differences, "Name", plex_meta.get("title"), jellyfin_item.get("title"))
+    _diff_int(differences, "ProductionYear", plex_meta.get("year"), jellyfin_item.get("year"))
+    _diff_date(differences, "PremiereDate", plex_meta.get("originally_available_at"), jellyfin_item.get("premiere_date"))
+    _diff_text(differences, "Overview", plex_meta.get("summary"), jellyfin_item.get("overview"))
+    _diff_list(differences, "Taglines", [plex_meta.get("tagline")] if plex_meta.get("tagline") else [], jellyfin_item.get("taglines"))
+    _diff_text(differences, "OfficialRating", plex_meta.get("content_rating"), jellyfin_item.get("official_rating"))
+    _diff_rating(differences, "CommunityRating", plex_meta.get("audience_rating"), jellyfin_item.get("community_rating"), multiplier=1)
+    _diff_rating(differences, "CriticRating", plex_meta.get("critic_rating"), jellyfin_item.get("critic_rating"), multiplier=10)
+    _diff_list(differences, "Genres", plex_meta.get("genres"), jellyfin_item.get("genres"))
+    _diff_list(differences, "Studios", plex_meta.get("studios"), jellyfin_item.get("studios"))
+    _diff_list(differences, "ProductionLocations", plex_meta.get("countries"), jellyfin_item.get("production_locations"))
+    _diff_provider_ids(differences, plex_meta.get("provider_ids"), jellyfin_item.get("provider_ids"))
+
+    if not differences:
+        return ""
+    shown = ", ".join(differences[:8])
+    if len(differences) > 8:
+        shown += f", +{len(differences) - 8} more"
+    return f"core metadata differs: {shown}"
+
+
+def _diff_text(differences: list[str], field: str, plex_value: object, jellyfin_value: object) -> None:
+    if _normalise_text(plex_value) != _normalise_text(jellyfin_value):
+        differences.append(field)
+
+
+def _diff_int(differences: list[str], field: str, plex_value: object, jellyfin_value: object) -> None:
+    if _normalise_int(plex_value) != _normalise_int(jellyfin_value):
+        differences.append(field)
+
+
+def _diff_date(differences: list[str], field: str, plex_value: object, jellyfin_value: object) -> None:
+    if _date_prefix(plex_value) != _date_prefix(jellyfin_value):
+        differences.append(field)
+
+
+def _diff_list(differences: list[str], field: str, plex_value: object, jellyfin_value: object) -> None:
+    if _normalise_list(plex_value) != _normalise_list(jellyfin_value):
+        differences.append(field)
+
+
+def _diff_rating(differences: list[str], field: str, plex_value: object, jellyfin_value: object, multiplier: int) -> None:
+    plex_rating = _normalise_float(plex_value)
+    jellyfin_rating = _normalise_float(jellyfin_value)
+    if plex_rating is not None:
+        plex_rating *= multiplier
+    if plex_rating is None and jellyfin_rating is None:
+        return
+    if plex_rating is None or jellyfin_rating is None or abs(plex_rating - jellyfin_rating) > 0.1:
+        differences.append(field)
+
+
+def _diff_provider_ids(differences: list[str], plex_value: object, jellyfin_value: object) -> None:
+    plex_ids = plex_value if isinstance(plex_value, dict) else {}
+    jellyfin_ids = jellyfin_value if isinstance(jellyfin_value, dict) else {}
+    for plex_key, jellyfin_key in (("imdb", "Imdb"), ("tmdb", "Tmdb"), ("tvdb", "Tvdb")):
+        if _normalise_text(plex_ids.get(plex_key)) != _normalise_text(jellyfin_ids.get(jellyfin_key)):
+            differences.append(f"ProviderIds.{jellyfin_key}")
+
+
+def _normalise_text(value: object) -> str:
+    return str(value or "").strip()
+
+
+def _normalise_int(value: object) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalise_float(value: object) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalise_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        text = _normalise_text(item).lower()
+        if text and text not in result:
+            result.append(text)
+    return sorted(result)
+
+
+def _date_prefix(value: object) -> str:
+    text = _normalise_text(value)
+    return text[:10] if len(text) >= 10 else text
+
 def _build_jellyfin_web_metadata_payload(jellyfin_item_id: str, plex_meta: dict[str, object]) -> dict[str, object]:
     title = _string(plex_meta.get("title"))
     year = plex_meta.get("year")
@@ -582,7 +698,7 @@ def _build_jellyfin_web_metadata_payload(jellyfin_item_id: str, plex_meta: dict[
         "OriginalTitle": _string(plex_meta.get("original_title")),
         "ForcedSortName": _string(plex_meta.get("sort_title") or title),
         "CommunityRating": _rating_or_blank(plex_meta.get("audience_rating")),
-        "CriticRating": "",
+        "CriticRating": _critic_rating_or_blank(plex_meta.get("critic_rating")),
         "IndexNumber": None,
         "AirsBeforeSeasonNumber": "",
         "AirsAfterSeasonNumber": "",
@@ -596,9 +712,9 @@ def _build_jellyfin_web_metadata_payload(jellyfin_item_id: str, plex_meta: dict[
         "Status": "",
         "AirDays": [],
         "AirTime": "",
-        "Genres": [],
+        "Genres": _string_list(plex_meta.get("genres")),
         "Tags": [],
-        "Studios": [],
+        "Studios": _studio_items(plex_meta.get("studios")),
         "PremiereDate": _premiere_date_or_none(plex_meta.get("originally_available_at")),
         "DateCreated": None,
         "EndDate": None,
@@ -611,18 +727,45 @@ def _build_jellyfin_web_metadata_payload(jellyfin_item_id: str, plex_meta: dict[
         "People": [],
         "LockData": False,
         "LockedFields": [],
-        "ProviderIds": {
-            "Imdb": "",
-            "Tmdb": "",
-            "TmdbCollection": "",
-            "TvdbCollection": "",
-            "Tvdb": "",
-            "TvdbSlug": "",
-        },
+        "ProviderIds": _provider_ids(plex_meta.get("provider_ids")),
+        "ProductionLocations": _string_list(plex_meta.get("countries")),
         "PreferredMetadataLanguage": "",
         "PreferredMetadataCountryCode": "",
         "Taglines": [_string(plex_meta.get("tagline"))] if plex_meta.get("tagline") else [],
     }
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        text = _string(item).strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def _studio_items(value: object) -> list[dict[str, str]]:
+    return [{"Name": name} for name in _string_list(value)]
+
+
+def _provider_ids(value: object) -> dict[str, str]:
+    provider_ids = {
+        "Imdb": "",
+        "Tmdb": "",
+        "TmdbCollection": "",
+        "TvdbCollection": "",
+        "Tvdb": "",
+        "TvdbSlug": "",
+    }
+    if not isinstance(value, dict):
+        return provider_ids
+    for key, target in (("imdb", "Imdb"), ("tmdb", "Tmdb"), ("tvdb", "Tvdb")):
+        text = _string(value.get(key)).strip()
+        if text:
+            provider_ids[target] = text
+    return provider_ids
 
 
 def _string(value: object) -> str:
@@ -637,6 +780,18 @@ def _rating_or_blank(value: object) -> object:
     except (TypeError, ValueError):
         return ""
     if 0 <= rating <= 10:
+        return rating
+    return ""
+
+
+def _critic_rating_or_blank(value: object) -> object:
+    try:
+        rating = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if 0 <= rating <= 10:
+        return rating * 10
+    if 0 <= rating <= 100:
         return rating
     return ""
 

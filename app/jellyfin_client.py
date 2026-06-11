@@ -67,7 +67,10 @@ class JellyfinClient:
             "ParentId": library_id,
             "Recursive": "true",
             "IncludeItemTypes": include_types,
-            "Fields": "Path,ProductionYear,RunTimeTicks",
+            "Fields": (
+                "Path,ProductionYear,RunTimeTicks,PremiereDate,Overview,Genres,Studios,"
+                "ProviderIds,OfficialRating,CommunityRating,CriticRating,ProductionLocations,Taglines"
+            ),
         }
         response = requests.get(self._url("/Items"), headers=self.headers, params=params, timeout=self.timeout)
         response.raise_for_status()
@@ -85,6 +88,16 @@ class JellyfinClient:
                     "duration_ms": duration_ms,
                     "path": item.get("Path", "") or "",
                     "media_type": item.get("Type", ""),
+                    "premiere_date": item.get("PremiereDate"),
+                    "overview": item.get("Overview"),
+                    "genres": _string_list(item.get("Genres")),
+                    "studios": _name_list(item.get("Studios")),
+                    "provider_ids": item.get("ProviderIds") or {},
+                    "official_rating": item.get("OfficialRating"),
+                    "community_rating": item.get("CommunityRating"),
+                    "critic_rating": item.get("CriticRating"),
+                    "production_locations": _string_list(item.get("ProductionLocations")),
+                    "taglines": _string_list(item.get("Taglines")),
                 }
             )
         return items
@@ -115,6 +128,31 @@ class JellyfinClient:
             f"Jellyfin update failed: HTTP {response.status_code} {response.reason}. "
             f"Fields sent: {fields}. Response: {body or ''}"
         )
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def _name_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        if isinstance(item, dict):
+            text = str(item.get("Name") or item.get("name") or "").strip()
+        else:
+            text = str(item or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
 
 
 def _int_or_none(value: object) -> int | None:
