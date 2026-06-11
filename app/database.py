@@ -68,6 +68,11 @@ CREATE TABLE IF NOT EXISTS sync_items (
     identity_synced_at TEXT,
     identity_sync_status TEXT,
     identity_sync_error TEXT,
+    metadata_synced_at TEXT,
+    metadata_sync_status TEXT,
+    metadata_sync_error TEXT,
+    metadata_scope_version TEXT,
+    metadata_fields TEXT,
     match_status TEXT NOT NULL DEFAULT 'unknown',
     last_seen_at TEXT,
     last_synced_at TEXT,
@@ -112,6 +117,7 @@ def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
 def _run_migrations(conn: sqlite3.Connection) -> None:
     if not _column_exists(conn, "path_mappings", "library_mapping_id"):
         conn.execute("ALTER TABLE path_mappings ADD COLUMN library_mapping_id INTEGER")
+
     for column, ddl in [
         ("jellyfin_title", "ALTER TABLE sync_items ADD COLUMN jellyfin_title TEXT"),
         ("jellyfin_year", "ALTER TABLE sync_items ADD COLUMN jellyfin_year INTEGER"),
@@ -120,6 +126,11 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         ("identity_synced_at", "ALTER TABLE sync_items ADD COLUMN identity_synced_at TEXT"),
         ("identity_sync_status", "ALTER TABLE sync_items ADD COLUMN identity_sync_status TEXT"),
         ("identity_sync_error", "ALTER TABLE sync_items ADD COLUMN identity_sync_error TEXT"),
+        ("metadata_synced_at", "ALTER TABLE sync_items ADD COLUMN metadata_synced_at TEXT"),
+        ("metadata_sync_status", "ALTER TABLE sync_items ADD COLUMN metadata_sync_status TEXT"),
+        ("metadata_sync_error", "ALTER TABLE sync_items ADD COLUMN metadata_sync_error TEXT"),
+        ("metadata_scope_version", "ALTER TABLE sync_items ADD COLUMN metadata_scope_version TEXT"),
+        ("metadata_fields", "ALTER TABLE sync_items ADD COLUMN metadata_fields TEXT"),
     ]:
         if not _column_exists(conn, "sync_items", column):
             conn.execute(ddl)
