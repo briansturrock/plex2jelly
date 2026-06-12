@@ -71,11 +71,24 @@ class PlexClient:
             for video in videos:
                 part = video.find("./Media/Part")
                 file_path = part.attrib.get("file", "") if part is not None else ""
+                ratings = _xml_child_dicts(video, "Rating")
                 items.append({
                     "rating_key": video.attrib.get("ratingKey", ""),
                     "guid": video.attrib.get("guid", ""),
                     "title": video.attrib.get("title", ""),
+                    "sort_title": video.attrib.get("titleSort") or video.attrib.get("title", ""),
+                    "original_title": video.attrib.get("originalTitle", ""),
+                    "summary": video.attrib.get("summary", ""),
+                    "tagline": video.attrib.get("tagline", ""),
                     "year": _int_or_none(video.attrib.get("year")),
+                    "originally_available_at": video.attrib.get("originallyAvailableAt", ""),
+                    "content_rating": video.attrib.get("contentRating", ""),
+                    "audience_rating": _float_or_none(video.attrib.get("audienceRating")),
+                    "critic_rating": _preferred_critic_rating(ratings),
+                    "genres": _xml_tags(video, "Genre"),
+                    "countries": _xml_tags(video, "Country"),
+                    "studios": _dedupe_strings([video.attrib.get("studio", ""), *_xml_tags(video, "Studio")]),
+                    "provider_ids": _provider_ids_from_guids(_xml_guid_ids(video)),
                     "duration_ms": _int_or_none(video.attrib.get("duration")),
                     "path": file_path,
                     "media_type": video.attrib.get("type", "movie"),
@@ -89,11 +102,25 @@ class PlexClient:
                 parts = media[0].get("Part") or []
                 if parts:
                     file_path = parts[0].get("file", "") or ""
+            ratings = video.get("Rating") or []
+            studio = video.get("studio", "")
             items.append({
                 "rating_key": str(video.get("ratingKey", "")),
                 "guid": video.get("guid", ""),
                 "title": video.get("title", ""),
+                "sort_title": video.get("titleSort") or video.get("title", ""),
+                "original_title": video.get("originalTitle", ""),
+                "summary": video.get("summary", ""),
+                "tagline": video.get("tagline", ""),
                 "year": _int_or_none(video.get("year")),
+                "originally_available_at": video.get("originallyAvailableAt", ""),
+                "content_rating": video.get("contentRating", ""),
+                "audience_rating": _float_or_none(video.get("audienceRating")),
+                "critic_rating": _preferred_critic_rating(ratings),
+                "genres": _tag_values(video.get("Genre")),
+                "countries": _tag_values(video.get("Country")),
+                "studios": _dedupe_strings([studio, *_tag_values(video.get("Studio"))]),
+                "provider_ids": _provider_ids_from_guids(_guid_values(video.get("Guid"))),
                 "duration_ms": _int_or_none(video.get("duration")),
                 "path": file_path,
                 "media_type": video.get("type", "movie"),

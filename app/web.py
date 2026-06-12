@@ -437,15 +437,9 @@ def _run_match_preview(library_mapping_id: int, cfg: AppConfig) -> dict[str, int
             "jellyfin_duration_ms": jellyfin_item.get("duration_ms"),
         }
         warning_parts = warning_reasons(row_for_warning)
-        rating_key = str(plex_item.get("rating_key") or "")
-        if rating_key:
-            try:
-                plex_meta = plex_client.item_metadata(rating_key)
-                metadata_warning = _metadata_difference_warning(plex_meta, jellyfin_item)
-                if metadata_warning:
-                    warning_parts.append(metadata_warning)
-            except Exception as exc:
-                warning_parts.append(f"core metadata comparison failed: {exc}")
+        metadata_warning = _metadata_difference_warning(plex_item, jellyfin_item)
+        if metadata_warning:
+            warning_parts.append(metadata_warning)
         warning = ", ".join(warning_parts)
         results.append({"status": "matched", "canonical": canonical, "plex": plex_item, "jellyfin": jellyfin_item, "warning": warning})
     for canonical, jellyfin_item in jellyfin_by_path.items():
