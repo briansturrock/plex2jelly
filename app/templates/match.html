@@ -103,11 +103,13 @@
 
   <form method="post" action="{{ url_for('apply_metadata') }}" class="loading-form">
     <input type="hidden" name="library_mapping_id" value="{{ selected_mapping_id }}">
-    <button type="submit">Apply selected Plex metadata</button>
+    <button type="submit" formaction="{{ url_for('apply_metadata') }}">Apply selected Plex metadata</button>
+    <button type="submit" formaction="{{ url_for('apply_people') }}">Apply selected Plex people</button>
     <span class="loading-indicator" hidden><span class="spinner"></span>Applying selected Jellyfin updates.</span>
     <p><small>
-      Only path-matched rows can be selected. This writes the current core Plex metadata scope
-      ({{ metadata_scope_version }}) to Jellyfin. Artwork, collections and watch-state are not included yet.
+      Only path-matched rows can be selected. Metadata writes the current core Plex metadata scope
+      ({{ metadata_scope_version }}) to Jellyfin. People writes Plex directors, writers, producers and cast.
+      Artwork, collections and watch-state are not included yet.
     </small></p>
 
     <table>

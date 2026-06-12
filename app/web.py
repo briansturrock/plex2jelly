@@ -343,6 +343,10 @@ def create_app() -> Flask:
     def apply_metadata():
         return _apply_metadata_route()
 
+    @app.post("/people/apply")
+    def apply_people():
+        return _apply_people_route()
+
     @app.post("/identity/apply")
     def apply_identity_legacy_alias():
         return _apply_metadata_route()
@@ -373,6 +377,40 @@ def create_app() -> Flask:
             deleted = conn.execute("DELETE FROM sync_items").rowcount
             flash(f"Reset all preview/sync state ({deleted} rows removed). Settings, libraries and path mappings were kept.", "success")
             return redirect(url_for("match_preview"))
+
+    def _apply_people_route():
+        cfg = AppConfig.load()
+        selected_ids = [int(value) for value in request.form.getlist("sync_item_id") if value.isdigit()]
+        return_mapping_id = request.form.get("library_mapping_id", "").strip()
+        if not selected_ids:
+            flash("Select at least one path-matched item to update.", "error")
+            return redirect(url_for("match_preview", library_mapping_id=return_mapping_id, filter="matched"))
+        if not cfg.has_plex or not cfg.has_jellyfin:
+            flash("Plex and Jellyfin must be configured first.", "error")
+            return redirect(url_for("match_preview", library_mapping_id=return_mapping_id, filter="matched"))
+        plex = PlexClient(cfg.plex_base_url, cfg.plex_token, timeout=15)
+        jellyfin = JellyfinClient(cfg.jellyfin_base_url, cfg.jellyfin_api_key, timeout=15)
+        applied = failed = skipped = 0
+        errors: list[str] = []
+        for sync_item_id in selected_ids:
+            try:
+                result = _apply_people_overwrite(sync_item_id, plex, jellyfin)
+                if result == "applied":
+                    applied += 1
+                elif result == "skipped":
+                    skipped += 1
+            except Exception as exc:
+                failed += 1
+                error_text = str(exc)
+                errors.append(error_text)
+                current_app.logger.exception("People overwrite failed for sync_item_id=%s: %s", sync_item_id, error_text)
+                _record_people_failure(sync_item_id, error_text)
+        category = "success" if failed == 0 else "error"
+        message = f"People overwrite complete: {applied} applied, {skipped} skipped, {failed} failed."
+        if errors:
+            message += f" First error: {errors[0]}"
+        flash(message, category)
+        return redirect(url_for("match_preview", library_mapping_id=return_mapping_id, filter="matched"))
 
     def _apply_metadata_route():
         cfg = AppConfig.load()
@@ -582,6 +620,36 @@ def _apply_metadata_overwrite(sync_item_id: int, plex: PlexClient, jellyfin: Jel
             (
                 sync_item_id,
                 f"Applied {METADATA_SCOPE_VERSION}: {plex_meta.get('title')} ({plex_meta.get('year') or ''}); fields={metadata_fields}",
+            ),
+        )
+    return "applied"
+
+
+def _apply_people_overwrite(sync_item_id: int, plex: PlexClient, jellyfin: JellyfinClient) -> str:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM sync_items WHERE id = ?", (sync_item_id,)).fetchone()
+    if not row or row["match_status"] != "matched" or not row["plex_rating_key"] or not row["canonical_path"]:
+        _record_metadata_audit(sync_item_id, "skipped", "Item is not a path-matched Plex/Jellyfin pair.")
+        return "skipped"
+    plex_meta = plex.item_metadata(row["plex_rating_key"])
+    if not plex_meta.get("title"):
+        raise RuntimeError("Plex metadata did not include a title.")
+    current_jellyfin_id = _find_current_jellyfin_item_id_by_path(row, jellyfin)
+    if not current_jellyfin_id:
+        raise RuntimeError("Could not rebind Jellyfin item by canonical path before people write.")
+    people = plex.item_people(row["plex_rating_key"])
+    payload = _build_jellyfin_web_metadata_payload(current_jellyfin_id, plex_meta)
+    payload["People"] = _jellyfin_people_items(people)
+    jellyfin.update_item_metadata_editor_payload(current_jellyfin_id, payload)
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO sync_audit(sync_item_id, operation, status, details)
+            VALUES (?, 'people_overwrite', 'applied', ?)
+            """,
+            (
+                sync_item_id,
+                f"Applied Plex people: {len(payload['People'])} people for {plex_meta.get('title')} ({plex_meta.get('year') or ''})",
             ),
         )
     return "applied"
@@ -860,6 +928,50 @@ def _valid_plex_date(value: object) -> bool:
         return False
     year, month, day = parts
     return len(year) == 4 and len(month) == 2 and len(day) == 2 and all(part.isdigit() for part in parts)
+
+
+def _jellyfin_people_items(people: object) -> list[dict[str, str]]:
+    if not isinstance(people, dict):
+        return []
+    result: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def add_many(source_key: str, jellyfin_type: str, include_role: bool = False) -> None:
+        source_rows = people.get(source_key)
+        if not isinstance(source_rows, list):
+            return
+        for source_row in source_rows:
+            if not isinstance(source_row, dict):
+                continue
+            name = _metadata_value(source_row.get("name"))
+            role = _metadata_value(source_row.get("role")) if include_role else ""
+            if not name:
+                continue
+            key = (jellyfin_type.casefold(), name.casefold(), role.casefold())
+            if key in seen:
+                continue
+            item = {"Name": name, "Type": jellyfin_type}
+            if include_role and role:
+                item["Role"] = role
+            result.append(item)
+            seen.add(key)
+
+    add_many("directors", "Director")
+    add_many("writers", "Writer")
+    add_many("producers", "Producer")
+    add_many("cast", "Actor", include_role=True)
+    return result
+
+
+def _record_people_failure(sync_item_id: int, error: str) -> None:
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO sync_audit(sync_item_id, operation, status, details)
+            VALUES (?, 'people_overwrite', 'failed', ?)
+            """,
+            (sync_item_id, error),
+        )
 
 
 def _record_metadata_failure(sync_item_id: int, error: str) -> None:

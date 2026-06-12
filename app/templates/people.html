@@ -3,7 +3,13 @@
 
 <section class="card">
   <h2>Plex people discovery</h2>
-  <p>Read-only preview from Plex for the selected path-matched movie. Nothing is written to Jellyfin from this page.</p>
+  <p>Preview from Plex for the selected path-matched movie.</p>
+  <form method="post" action="{{ url_for('apply_people') }}" class="inline-form loading-form">
+    <input type="hidden" name="library_mapping_id" value="{{ row.library_mapping_id }}">
+    <input type="hidden" name="sync_item_id" value="{{ row.id }}">
+    <button type="submit">Apply these people to Jellyfin</button>
+    <span class="loading-indicator" hidden><span class="spinner"></span>Applying Plex people.</span>
+  </form>
   <p>
     <strong>{{ row.plex_title or 'Plex item' }}</strong>{% if row.plex_year %} ({{ row.plex_year }}){% endif %}<br>
     <small>{{ row.canonical_path }}</small>
@@ -36,3 +42,14 @@
 </section>
 
 {% endblock %}
+
+<script>
+  document.querySelectorAll('form.loading-form').forEach((form) => {
+    form.addEventListener('submit', () => {
+      const indicator = form.querySelector('.loading-indicator');
+      const button = form.querySelector('button[type="submit"]');
+      if (indicator) indicator.hidden = false;
+      if (button) button.disabled = true;
+    });
+  });
+</script>
