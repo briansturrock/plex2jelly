@@ -1,0 +1,30 @@
+{% if rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Role</th>
+        <th>Plex tag key</th>
+        <th>Thumb</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for person in rows %}
+        <tr>
+          <td>{{ person.name }}</td>
+          <td>{{ person.role or '—' }}</td>
+          <td><small>{{ person.tag_key or '—' }}</small></td>
+          <td>
+            {% if person.thumb %}
+              <small>{{ person.thumb }}</small>
+            {% else %}
+              —
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <p>None found in Plex.</p>
+{% endif %}

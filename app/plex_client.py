@@ -175,6 +175,80 @@ class PlexClient:
             "provider_ids": _provider_ids_from_guids(_guid_values(item.get("Guid"))),
         }
 
+    def item_people(self, rating_key: str) -> dict[str, object]:
+        data = self.get_json_or_xml(f"/library/metadata/{rating_key}")
+        if isinstance(data, ET.Element):
+            video = data.find("Video")
+            if video is None:
+                return _empty_people()
+            return {
+                "directors": _xml_people(video, "Director"),
+                "writers": _xml_people(video, "Writer"),
+                "producers": _xml_people(video, "Producer"),
+                "cast": _xml_people(video, "Role", include_role=True),
+            }
+
+        container = data.get("MediaContainer", data)
+        metadata = container.get("Metadata") or []
+        if not metadata:
+            return _empty_people()
+        item = metadata[0]
+        return {
+            "directors": _people_values(item.get("Director")),
+            "writers": _people_values(item.get("Writer")),
+            "producers": _people_values(item.get("Producer")),
+            "cast": _people_values(item.get("Role"), include_role=True),
+        }
+
+
+def _empty_people() -> dict[str, list[dict[str, str]]]:
+    return {"directors": [], "writers": [], "producers": [], "cast": []}
+
+
+def _people_values(items: object, include_role: bool = False) -> list[dict[str, str]]:
+    if not isinstance(items, list):
+        return []
+    people: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("tag") or "").strip()
+        role = str(item.get("role") or "").strip() if include_role else ""
+        if not name:
+            continue
+        key = (name.casefold(), role.casefold())
+        if key in seen:
+            continue
+        people.append({
+            "name": name,
+            "role": role,
+            "tag_key": str(item.get("tagKey") or "").strip(),
+            "thumb": str(item.get("thumb") or "").strip(),
+        })
+        seen.add(key)
+    return people
+
+
+def _xml_people(parent: ET.Element, child_name: str, include_role: bool = False) -> list[dict[str, str]]:
+    people: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for child in parent.findall(child_name):
+        name = child.attrib.get("tag", "").strip()
+        role = child.attrib.get("role", "").strip() if include_role else ""
+        if not name:
+            continue
+        key = (name.casefold(), role.casefold())
+        if key in seen:
+            continue
+        people.append({
+            "name": name,
+            "role": role,
+            "tag_key": child.attrib.get("tagKey", "").strip(),
+            "thumb": child.attrib.get("thumb", "").strip(),
+        })
+        seen.add(key)
+    return people
 
 def _tag_values(items: object) -> list[str]:
     if not isinstance(items, list):

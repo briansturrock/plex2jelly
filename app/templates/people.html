@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="card">
+  <h2>Plex people discovery</h2>
+  <p>Read-only preview from Plex for the selected path-matched movie. Nothing is written to Jellyfin from this page.</p>
+  <p>
+    <strong>{{ row.plex_title or 'Plex item' }}</strong>{% if row.plex_year %} ({{ row.plex_year }}){% endif %}<br>
+    <small>{{ row.canonical_path }}</small>
+  </p>
+  <p><a href="{{ url_for('match_preview', library_mapping_id=row.library_mapping_id, filter='matched') }}">Back to match preview</a></p>
+</section>
+
+<section class="card">
+  <h2>Directors</h2>
+  {% set rows = people.directors %}
+  {% include "people_table.html" %}
+</section>
+
+<section class="card">
+  <h2>Writers</h2>
+  {% set rows = people.writers %}
+  {% include "people_table.html" %}
+</section>
+
+<section class="card">
+  <h2>Producers</h2>
+  {% set rows = people.producers %}
+  {% include "people_table.html" %}
+</section>
+
+<section class="card">
+  <h2>Cast</h2>
+  {% set rows = people.cast %}
+  {% include "people_table.html" %}
+</section>
+
+{% endblock %}

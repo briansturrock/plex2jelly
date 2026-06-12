@@ -117,6 +117,7 @@
           <th>Status</th>
           <th>Plex</th>
           <th>Jellyfin</th>
+          <th>People</th>
           <th>Canonical path</th>
         </tr>
       </thead>
@@ -161,10 +162,17 @@
               {{ row.jellyfin_title or '—' }}{% if row.jellyfin_year %} ({{ row.jellyfin_year }}){% endif %}<br>
               <small>{{ row.jellyfin_path or '' }}</small>
             </td>
+            <td>
+              {% if row.match_status == 'matched' and row.plex_rating_key %}
+                <a href="{{ url_for('people_preview', sync_item_id=row.id) }}">View Plex people</a>
+              {% else %}
+                —
+              {% endif %}
+            </td>
             <td><small>{{ row.canonical_path }}</small></td>
           </tr>
         {% else %}
-          <tr><td colspan="5">No preview results yet. Run a preview scan.</td></tr>
+          <tr><td colspan="6">No preview results yet. Run a preview scan.</td></tr>
         {% endfor %}
       </tbody>
     </table>

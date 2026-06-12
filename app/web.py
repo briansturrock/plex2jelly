@@ -313,6 +313,32 @@ def create_app() -> Flask:
             metadata_scope_version=METADATA_SCOPE_VERSION,
         )
 
+    @app.get("/people/<int:sync_item_id>")
+    def people_preview(sync_item_id: int):
+        cfg = AppConfig.load()
+        if not cfg.has_plex:
+            flash("Plex must be configured first.", "error")
+            return redirect(url_for("match_preview", filter="matched"))
+        with connect() as conn:
+            row = conn.execute(
+                """
+                SELECT si.*, lm.name AS library_name
+                FROM sync_items si
+                JOIN library_mappings lm ON lm.id = si.library_mapping_id
+                WHERE si.id = ?
+                """,
+                (sync_item_id,),
+            ).fetchone()
+        if not row or row["match_status"] != "matched" or not row["plex_rating_key"]:
+            flash("Select a path-matched Plex/Jellyfin item first.", "error")
+            return redirect(url_for("match_preview", filter="matched"))
+        try:
+            people = PlexClient(cfg.plex_base_url, cfg.plex_token, timeout=15).item_people(row["plex_rating_key"])
+        except Exception as exc:
+            flash(f"Plex people discovery failed: {exc}", "error")
+            return redirect(url_for("match_preview", library_mapping_id=row["library_mapping_id"], filter="matched"))
+        return render_template("people.html", row=row, people=people)
+
     @app.post("/metadata/apply")
     def apply_metadata():
         return _apply_metadata_route()
