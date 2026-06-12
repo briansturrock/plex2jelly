@@ -67,6 +67,8 @@
         <option value="unmatched_jellyfin" {% if status_filter == 'unmatched_jellyfin' %}selected{% endif %}>Unmatched Jellyfin only</option>
         <option value="matched" {% if status_filter == 'matched' %}selected{% endif %}>Path-matched only</option>
         <option value="current" {% if status_filter == 'current' %}selected{% endif %}>Current matched only</option>
+        <option value="people_pending" {% if status_filter == 'people_pending' %}selected{% endif %}>People not synced</option>
+        <option value="people_failed" {% if status_filter == 'people_failed' %}selected{% endif %}>People failed only</option>
       </select>
     </label>
     <label>
@@ -89,6 +91,8 @@
     <span>Path failures: {{ stats.path_failure or 0 }}</span>
     <span>Metadata current ({{ metadata_scope_version }}): {{ stats.metadata_current or 0 }}</span>
     <span>Metadata failed: {{ stats.metadata_failed or 0 }}</span>
+    <span>People current ({{ people_scope_version }}): {{ stats.people_current or 0 }}</span>
+    <span>People failed: {{ stats.people_failed or 0 }}</span>
   </div>
 
   <div class="pagination">
@@ -154,6 +158,19 @@
               {% endif %}
               {% if row.metadata_sync_error %}
                 <br><small class="bad">{{ row.metadata_sync_error }}</small>
+              {% endif %}
+
+              {% if row.people_sync_status %}
+                <br><small>people: {{ row.people_sync_status }}{% if row.people_count is not none %} ({{ row.people_count }}){% endif %}</small>
+              {% endif %}
+              {% if row.people_scope_version %}
+                <br><small>people scope: {{ row.people_scope_version }}</small>
+              {% endif %}
+              {% if row.people_synced_at %}
+                <br><small>people synced: {{ row.people_synced_at }}</small>
+              {% endif %}
+              {% if row.people_sync_error %}
+                <br><small class="bad">{{ row.people_sync_error }}</small>
               {% endif %}
             </td>
             <td>

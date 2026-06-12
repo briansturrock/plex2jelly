@@ -21,6 +21,7 @@ from app.matcher import canonicalise_path, warning_reasons
 from app.plex_client import PlexClient
 
 METADATA_SCOPE_VERSION = "movie_core_v5_value_normalisation"
+PEOPLE_SCOPE_VERSION = "movie_people_v1"
 METADATA_FIELDS = [
     "Name",
     "OriginalTitle",
@@ -43,6 +44,7 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.secret_key = "plex2jelly-local-setup"
     init_db()
+    _ensure_people_sync_columns()
 
     @app.context_processor
     def inject_version():
@@ -267,6 +269,11 @@ def create_app() -> Flask:
                 where.append("match_status = 'matched' AND COALESCE(match_warning, '') != ''")
             elif status_filter == "current":
                 where.append("match_status = 'matched' AND COALESCE(match_warning, '') = ''")
+            elif status_filter == "people_pending":
+                where.append("match_status = 'matched' AND (COALESCE(people_sync_status, '') != 'applied' OR COALESCE(people_scope_version, '') != ?)")
+                params.append(PEOPLE_SCOPE_VERSION)
+            elif status_filter == "people_failed":
+                where.append("match_status = 'matched' AND people_sync_status = 'failed'")
             elif status_filter in {"matched", "unmatched_plex", "unmatched_jellyfin", "path_failure"}:
                 where.append("match_status = ?")
                 params.append(status_filter)
@@ -280,10 +287,12 @@ def create_app() -> Flask:
                        SUM(CASE WHEN match_status = 'unmatched_jellyfin' THEN 1 ELSE 0 END) AS unmatched_jellyfin,
                        SUM(CASE WHEN match_status = 'path_failure' THEN 1 ELSE 0 END) AS path_failure,
                        SUM(CASE WHEN metadata_scope_version = ? AND metadata_sync_status = 'applied' THEN 1 ELSE 0 END) AS metadata_current,
-                       SUM(CASE WHEN metadata_sync_status = 'failed' THEN 1 ELSE 0 END) AS metadata_failed
+                       SUM(CASE WHEN metadata_sync_status = 'failed' THEN 1 ELSE 0 END) AS metadata_failed,
+                       SUM(CASE WHEN people_scope_version = ? AND people_sync_status = 'applied' THEN 1 ELSE 0 END) AS people_current,
+                       SUM(CASE WHEN people_sync_status = 'failed' THEN 1 ELSE 0 END) AS people_failed
                 FROM sync_items{where_sql}
                 """,
-                [METADATA_SCOPE_VERSION, *params],
+                [METADATA_SCOPE_VERSION, PEOPLE_SCOPE_VERSION, *params],
             ).fetchone()
             total = stats["total"] or 0
             rows = conn.execute(
@@ -311,6 +320,7 @@ def create_app() -> Flask:
             stats=stats,
             rows=rows,
             metadata_scope_version=METADATA_SCOPE_VERSION,
+            people_scope_version=PEOPLE_SCOPE_VERSION,
         )
 
     @app.get("/people/<int:sync_item_id>")
@@ -410,7 +420,7 @@ def create_app() -> Flask:
         if errors:
             message += f" First error: {errors[0]}"
         flash(message, category)
-        return redirect(url_for("match_preview", library_mapping_id=return_mapping_id, filter="matched"))
+        return redirect(url_for("match_preview", library_mapping_id=return_mapping_id, filter="people_pending"))
 
     def _apply_metadata_route():
         cfg = AppConfig.load()
@@ -447,6 +457,21 @@ def create_app() -> Flask:
         return redirect(url_for("match_preview", library_mapping_id=return_mapping_id, filter="issues"))
 
     return app
+
+
+def _ensure_people_sync_columns() -> None:
+    columns = {
+        "people_synced_at": "TEXT",
+        "people_sync_status": "TEXT",
+        "people_sync_error": "TEXT",
+        "people_scope_version": "TEXT",
+        "people_count": "INTEGER",
+    }
+    with connect() as conn:
+        existing = {row["name"] for row in conn.execute("PRAGMA table_info(sync_items)").fetchall()}
+        for name, definition in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE sync_items ADD COLUMN {name} {definition}")
 
 
 def _safe_int(value: object, default: int, minimum: int, maximum: int) -> int:
@@ -519,6 +544,7 @@ def _run_match_preview(library_mapping_id: int, cfg: AppConfig) -> dict[str, int
                 """
                 SELECT canonical_path, metadata_synced_at, metadata_sync_status, metadata_sync_error,
                        metadata_scope_version, metadata_fields,
+                       people_synced_at, people_sync_status, people_sync_error, people_scope_version, people_count,
                        identity_synced_at, identity_sync_status, identity_sync_error
                 FROM sync_items
                 WHERE library_mapping_id = ?
@@ -542,10 +568,11 @@ def _run_match_preview(library_mapping_id: int, cfg: AppConfig) -> dict[str, int
                     match_status, match_warning,
                     metadata_synced_at, metadata_sync_status, metadata_sync_error,
                     metadata_scope_version, metadata_fields,
+                    people_synced_at, people_sync_status, people_sync_error, people_scope_version, people_count,
                     identity_synced_at, identity_sync_status, identity_sync_error,
                     last_seen_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """,
                 (
                     library_mapping_id,
@@ -570,6 +597,11 @@ def _run_match_preview(library_mapping_id: int, cfg: AppConfig) -> dict[str, int
                     previous["metadata_sync_error"] if previous and previous["metadata_sync_status"] != "failed" else None,
                     previous["metadata_scope_version"] if previous and previous["metadata_sync_status"] != "failed" else None,
                     previous["metadata_fields"] if previous and previous["metadata_sync_status"] != "failed" else None,
+                    previous["people_synced_at"] if previous else None,
+                    previous["people_sync_status"] if previous else None,
+                    previous["people_sync_error"] if previous else None,
+                    previous["people_scope_version"] if previous else None,
+                    previous["people_count"] if previous else None,
                     previous["identity_synced_at"] if previous else None,
                     previous["identity_sync_status"] if previous else None,
                     previous["identity_sync_error"] if previous else None,
@@ -641,7 +673,18 @@ def _apply_people_overwrite(sync_item_id: int, plex: PlexClient, jellyfin: Jelly
     payload = _build_jellyfin_web_metadata_payload(current_jellyfin_id, plex_meta)
     payload["People"] = _jellyfin_people_items(people)
     jellyfin.update_item_metadata_editor_payload(current_jellyfin_id, payload)
+    people_count = len(payload['People'])
     with connect() as conn:
+        conn.execute(
+            """
+            UPDATE sync_items
+            SET jellyfin_item_id = ?,
+                people_synced_at = CURRENT_TIMESTAMP, people_sync_status = 'applied', people_sync_error = NULL,
+                people_scope_version = ?, people_count = ?, last_synced_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (current_jellyfin_id, PEOPLE_SCOPE_VERSION, people_count, sync_item_id),
+        )
         conn.execute(
             """
             INSERT INTO sync_audit(sync_item_id, operation, status, details)
@@ -649,7 +692,7 @@ def _apply_people_overwrite(sync_item_id: int, plex: PlexClient, jellyfin: Jelly
             """,
             (
                 sync_item_id,
-                f"Applied Plex people: {len(payload['People'])} people for {plex_meta.get('title')} ({plex_meta.get('year') or ''})",
+                f"Applied {PEOPLE_SCOPE_VERSION}: {people_count} people for {plex_meta.get('title')} ({plex_meta.get('year') or ''})",
             ),
         )
     return "applied"
@@ -965,6 +1008,14 @@ def _jellyfin_people_items(people: object) -> list[dict[str, str]]:
 
 def _record_people_failure(sync_item_id: int, error: str) -> None:
     with connect() as conn:
+        conn.execute(
+            """
+            UPDATE sync_items
+            SET people_sync_status = 'failed', people_sync_error = ?, people_scope_version = ?
+            WHERE id = ?
+            """,
+            (error, PEOPLE_SCOPE_VERSION, sync_item_id),
+        )
         conn.execute(
             """
             INSERT INTO sync_audit(sync_item_id, operation, status, details)
