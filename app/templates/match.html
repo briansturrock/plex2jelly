@@ -61,11 +61,12 @@
       Show
       <select name="filter">
         <option value="all" {% if status_filter == 'all' %}selected{% endif %}>All</option>
-        <option value="issues" {% if status_filter == 'issues' %}selected{% endif %}>Differences and unmatched only</option>
-        <option value="warnings" {% if status_filter == 'warnings' %}selected{% endif %}>Differences only</option>
+        <option value="issues" {% if status_filter == 'issues' %}selected{% endif %}>Differences + unmatched</option>
+        <option value="warnings" {% if status_filter == 'warnings' %}selected{% endif %}>Metadata differences only</option>
         <option value="unmatched_plex" {% if status_filter == 'unmatched_plex' %}selected{% endif %}>Unmatched Plex only</option>
         <option value="unmatched_jellyfin" {% if status_filter == 'unmatched_jellyfin' %}selected{% endif %}>Unmatched Jellyfin only</option>
-        <option value="matched" {% if status_filter == 'matched' %}selected{% endif %}>Matched only</option>
+        <option value="matched" {% if status_filter == 'matched' %}selected{% endif %}>Path-matched only</option>
+        <option value="current" {% if status_filter == 'current' %}selected{% endif %}>Current matched only</option>
       </select>
     </label>
     <label>

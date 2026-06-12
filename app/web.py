@@ -260,13 +260,14 @@ def create_app() -> Flask:
                 where.append("library_mapping_id = ?")
                 params.append(int(selected_mapping_id))
             if status_filter == "issues":
-                where.append("match_status != 'matched' OR COALESCE(match_warning, '') != ''")
-            elif status_filter in {"matched", "warnings", "unmatched_plex", "unmatched_jellyfin", "path_failure"}:
-                if status_filter == "warnings":
-                    where.append("COALESCE(match_warning, '') != ''")
-                else:
-                    where.append("match_status = ?")
-                    params.append(status_filter)
+                where.append("match_status != 'matched' OR (match_status = 'matched' AND COALESCE(match_warning, '') != '')")
+            elif status_filter == "warnings":
+                where.append("match_status = 'matched' AND COALESCE(match_warning, '') != ''")
+            elif status_filter == "current":
+                where.append("match_status = 'matched' AND COALESCE(match_warning, '') = ''")
+            elif status_filter in {"matched", "unmatched_plex", "unmatched_jellyfin", "path_failure"}:
+                where.append("match_status = ?")
+                params.append(status_filter)
             where_sql = " WHERE " + " AND ".join(f"({w})" for w in where) if where else ""
             stats = conn.execute(
                 f"""
