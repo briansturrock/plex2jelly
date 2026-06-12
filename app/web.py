@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from typing import Any
 
 from flask import Flask, current_app, flash, redirect, render_template, request, url_for
@@ -18,7 +20,7 @@ from app.jellyfin_client import JellyfinClient
 from app.matcher import canonicalise_path, warning_reasons
 from app.plex_client import PlexClient
 
-METADATA_SCOPE_VERSION = "movie_core_v4_full_metadata"
+METADATA_SCOPE_VERSION = "movie_core_v5_value_normalisation"
 METADATA_FIELDS = [
     "Name",
     "OriginalTitle",
@@ -674,10 +676,33 @@ def _normalise_list(value: object) -> list[str]:
         return []
     result: list[str] = []
     for item in value:
-        text = _normalise_text(item).lower()
-        if text and text not in result:
-            result.append(text)
+        key = _metadata_value_key(item)
+        if key and key not in result:
+            result.append(key)
     return sorted(result)
+
+
+def _metadata_value(value: object) -> str:
+    """Clean list-style metadata values without ASCII-folding user-visible text.
+
+    This intentionally preserves accents, apostrophes, hyphens, and non-English
+    alphabets while fixing common spacing issues that can create duplicate
+    Jellyfin ItemValues, e.g. "Action &Adventure" vs "Action & Adventure".
+    """
+    text = _string(value)
+    text = unicodedata.normalize("NFC", text)
+    text = text.strip()
+    text = re.sub(r"\s+", " ", text)
+    # Only normalise ampersand spacing when a space already exists on one side.
+    # This avoids changing compact names such as AT&T.
+    text = re.sub(r"\s+&\s*", " & ", text)
+    text = re.sub(r"\s*&\s+", " & ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _metadata_value_key(value: object) -> str:
+    return _metadata_value(value).casefold()
 
 
 def _date_prefix(value: object) -> str:
@@ -687,6 +712,7 @@ def _date_prefix(value: object) -> str:
 def _build_jellyfin_web_metadata_payload(jellyfin_item_id: str, plex_meta: dict[str, object]) -> dict[str, object]:
     title = _string(plex_meta.get("title"))
     year = plex_meta.get("year")
+    tagline = _metadata_value(plex_meta.get("tagline"))
     return {
         "Id": jellyfin_item_id,
         "Name": title,
@@ -726,7 +752,7 @@ def _build_jellyfin_web_metadata_payload(jellyfin_item_id: str, plex_meta: dict[
         "ProductionLocations": _string_list(plex_meta.get("countries")),
         "PreferredMetadataLanguage": "",
         "PreferredMetadataCountryCode": "",
-        "Taglines": [_string(plex_meta.get("tagline"))] if plex_meta.get("tagline") else [],
+        "Taglines": [tagline] if tagline else [],
     }
 
 
@@ -734,10 +760,13 @@ def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     result: list[str] = []
+    seen: set[str] = set()
     for item in value:
-        text = _string(item).strip()
-        if text and text not in result:
+        text = _metadata_value(item)
+        key = text.casefold()
+        if text and key not in seen:
             result.append(text)
+            seen.add(key)
     return result
 
 
